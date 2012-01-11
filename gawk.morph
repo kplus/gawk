@@ -1,0 +1,5 @@
+{
+    "name" : "gawk",
+    "kind" : "chunk",
+    "build-system" : "autotools"
+}
