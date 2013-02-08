@@ -1,0 +1,12 @@
+{
+    "name" : "stage2-gawk",
+    "kind" : "chunk",
+    "build-system" : "autotools",
+    "configure-commands": [
+        "stage2-eglibc-fix-specs",
+        "STAGE2_SYSROOT=\"$(dirname $(pwd))\" CPPFLAGS=\"-B$STAGE2_SYSROOT/tools --sysroot=$STAGE2_SYSROOT\" LDFLAGS=\"-Wl,--sysroot=$STAGE2_SYSROOT\" ./configure --prefix=\"$PREFIX\" --disable-nls --build=$BUILD --host=$TARGET_STAGE1"
+    ],
+    "build-commands": [
+        "STAGE2_SYSROOT=\"$(dirname $(pwd))\" make"
+    ]
+}
