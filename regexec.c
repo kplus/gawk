@@ -1,5 +1,5 @@
 /* Extended regular expression matching and search library.
-   Copyright (C) 2002-2005, 2007, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2002-2013 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Isamu Hasegawa <isamu@yamato.ibm.com>.
 
@@ -14,9 +14,8 @@
    Lesser General Public License for more details.
 
    You should have received a copy of the GNU Lesser General Public
-   License along with the GNU C Library; if not, write to the Free
-   Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
-   02110-1301 USA.  */
+   License along with the GNU C Library; if not, see
+   <http://www.gnu.org/licenses/>.  */
 
 static reg_errcode_t match_ctx_init (re_match_context_t *cache, int eflags,
 				     int n) internal_function;
@@ -198,8 +197,17 @@ static int group_nodes_into_DFAstates (const re_dfa_t *dfa,
 static int check_node_accept (const re_match_context_t *mctx,
 			      const re_token_t *node, int idx)
      internal_function;
-static reg_errcode_t extend_buffers (re_match_context_t *mctx)
+static reg_errcode_t extend_buffers (re_match_context_t *mctx, int min_len)
      internal_function;
+
+#ifdef GAWK
+#undef MIN	/* safety */
+static int
+MIN(size_t a, size_t b)
+{
+	return (a < b ? a : b);
+}
+#endif
 
 /* Entry point for POSIX code.  */
 
@@ -367,7 +375,7 @@ re_search_2_stub (bufp, string1, length1, string2, length2, start, range, regs,
   const char *str;
   int rval;
   int len = length1 + length2;
-  int free_str = 0;
+  char *s = NULL;
 
   if (BE (length1 < 0 || length2 < 0 || stop < 0 || len < length1, 0))
     return -2;
@@ -376,7 +384,7 @@ re_search_2_stub (bufp, string1, length1, string2, length2, start, range, regs,
   if (length2 > 0)
     if (length1 > 0)
       {
-	char *s = re_malloc (char, len);
+	s = re_malloc (char, len);
 
 	if (BE (s == NULL, 0))
 	  return -2;
@@ -387,7 +395,6 @@ re_search_2_stub (bufp, string1, length1, string2, length2, start, range, regs,
 	memcpy (s + length1, string2, length2);
 #endif
 	str = s;
-	free_str = 1;
       }
     else
       str = string2;
@@ -395,8 +402,7 @@ re_search_2_stub (bufp, string1, length1, string2, length2, start, range, regs,
     str = string1;
 
   rval = re_search_stub (bufp, str, len, start, range, stop, regs, ret_len);
-  if (free_str)
-    re_free ((char *) str);
+  re_free (s);
   return rval;
 }
 
@@ -658,7 +664,7 @@ re_search_internal (preg, string, length, start, range, stop, nmatch, pmatch,
   nmatch -= extra_nmatch;
 
   /* Check if the DFA haven't been compiled.  */
-  if (BE (preg->used == 0 || dfa->init_state == NULL
+  if (BE (preg->used == 0 || dfa == NULL || dfa->init_state == NULL
 	  || dfa->init_state_word == NULL || dfa->init_state_nl == NULL
 	  || dfa->init_state_begbuf == NULL, 0))
     return REG_NOMATCH;
@@ -1156,11 +1162,12 @@ check_matching (re_match_context_t *mctx, int fl_longest_match,
       re_dfastate_t *old_state = cur_state;
       int next_char_idx = re_string_cur_idx (&mctx->input) + 1;
 
-      if (BE (next_char_idx >= mctx->input.bufs_len, 0)
+      if ((BE (next_char_idx >= mctx->input.bufs_len, 0)
+	   && mctx->input.bufs_len < mctx->input.len)
 	  || (BE (next_char_idx >= mctx->input.valid_len, 0)
 	      && mctx->input.valid_len < mctx->input.len))
 	{
-	  err = extend_buffers (mctx);
+	  err = extend_buffers (mctx, next_char_idx + 1);
 	  if (BE (err != REG_NOERROR, 0))
 	    {
 	      assert (err == REG_ESPACE);
@@ -1734,12 +1741,13 @@ clean_state_log_if_needed (re_match_context_t *mctx, int next_state_log_idx)
 {
   int top = mctx->state_log_top;
 
-  if (next_state_log_idx >= mctx->input.bufs_len
+  if ((next_state_log_idx >= mctx->input.bufs_len
+       && mctx->input.bufs_len < mctx->input.len)
       || (next_state_log_idx >= mctx->input.valid_len
 	  && mctx->input.valid_len < mctx->input.len))
     {
       reg_errcode_t err;
-      err = extend_buffers (mctx);
+      err = extend_buffers (mctx, next_state_log_idx + 1);
       if (BE (err != REG_NOERROR, 0))
 	return err;
     }
@@ -2793,7 +2801,7 @@ get_subexp (re_match_context_t *mctx, int bkref_node, int bkref_str_idx)
 		  if (bkref_str_off >= mctx->input.len)
 		    break;
 
-		  err = extend_buffers (mctx);
+		  err = extend_buffers (mctx, bkref_str_off + 1);
 		  if (BE (err != REG_NOERROR, 0))
 		    return err;
 
@@ -3932,7 +3940,7 @@ check_node_accept_bytes (const re_dfa_t *dfa, int node_idx,
 		_NL_CURRENT (LC_COLLATE, _NL_COLLATE_EXTRAMB);
 	      indirect = (const int32_t *)
 		_NL_CURRENT (LC_COLLATE, _NL_COLLATE_INDIRECTMB);
-	      int32_t idx = findidx (&cp);
+	      int32_t idx = findidx (&cp, elem_len);
 	      if (idx > 0)
 		for (i = 0; i < cset->nequiv_classes; ++i)
 		  {
@@ -3963,18 +3971,10 @@ check_node_accept_bytes (const re_dfa_t *dfa, int node_idx,
 # endif /* _LIBC */
 	{
 	  /* match with range expression?  */
-#if __GNUC__ >= 2
-	  wchar_t cmp_buf[] = {L'\0', L'\0', wc, L'\0', L'\0', L'\0'};
-#else
-	  wchar_t cmp_buf[] = {L'\0', L'\0', L'\0', L'\0', L'\0', L'\0'};
-	  cmp_buf[2] = wc;
-#endif
 	  for (i = 0; i < cset->nranges; ++i)
 	    {
-	      cmp_buf[0] = cset->range_starts[i];
-	      cmp_buf[4] = cset->range_ends[i];
-	      if (wcscoll (cmp_buf, cmp_buf + 2) <= 0
-		  && wcscoll (cmp_buf + 2, cmp_buf + 4) <= 0)
+              if (cset->range_starts[i] <= wc
+                  && wc <= cset->range_ends[i])
 		{
 		  match_len = char_len;
 		  goto check_node_accept_bytes_match;
@@ -4111,7 +4111,7 @@ check_node_accept (const re_match_context_t *mctx, const re_token_t *node,
 
 static reg_errcode_t
 internal_function __attribute_warn_unused_result__
-extend_buffers (re_match_context_t *mctx)
+extend_buffers (re_match_context_t *mctx, int min_len)
 {
   reg_errcode_t ret;
   re_string_t *pstr = &mctx->input;
@@ -4120,8 +4120,10 @@ extend_buffers (re_match_context_t *mctx)
   if (BE (INT_MAX / 2 / sizeof (re_dfastate_t *) <= pstr->bufs_len, 0))
     return REG_ESPACE;
 
-  /* Double the lengthes of the buffers.  */
-  ret = re_string_realloc_buffers (pstr, pstr->bufs_len * 2);
+  /* Double the lengthes of the buffers, but allocate at least MIN_LEN.  */
+  ret = re_string_realloc_buffers (pstr,
+				   MAX (min_len,
+					MIN (pstr->len, pstr->bufs_len * 2)));
   if (BE (ret != REG_NOERROR, 0))
     return ret;
 

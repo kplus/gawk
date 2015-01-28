@@ -3,7 +3,7 @@
  */
 
 /* 
- * Copyright (C) 2004, 2010, 2011 the Free Software Foundation, Inc.
+ * Copyright (C) 2004, 2010, 2011, 2013, 2014 the Free Software Foundation, Inc.
  * 
  * This file is part of GAWK, the GNU implementation of the
  * AWK Programming Language.
@@ -36,16 +36,16 @@ extern NODE *get_function(void);
 
 extern int gprintf(FILE *fp, const char *format, ...);
 extern jmp_buf pager_quit_tag;
-extern int pager_quit_tag_valid;
+extern bool pager_quit_tag_valid;
 
-extern int output_is_tty;
+extern bool output_is_tty;
 extern int input_fd;
-extern int input_from_tty;
+extern bool input_from_tty;
 extern FILE *out_fp;
-extern char *dPrompt;
-extern char *commands_Prompt;
-extern char *eval_Prompt;
-extern char *dgawk_Prompt;
+extern char *dbg_prompt;
+extern char *commands_prompt;
+extern char *eval_prompt;
+extern char *dgawk_prompt;
 
 enum argtype {
 	D_illegal,
@@ -109,7 +109,8 @@ enum argtype {
 /* non-number arguments to commands */ 
 
 enum nametypeval {
-	A_ARGS = 1,
+	A_NONE = 0,
+	A_ARGS,
 	A_BREAK,
 	A_DEL,
 	A_DISPLAY,
@@ -139,7 +140,7 @@ typedef struct cmd_argument {
 #define a_string  value.sval	/* type = D_string, D_array, D_subscript or D_variable */
 #define a_node    value.nodeval /* type = D_node, D_field or D_func */
 
-	int a_count;				/* subscript count for D_subscript and D_array */
+	int a_count;		/* subscript count for D_subscript and D_array */
 } CMDARG;
 
 typedef int (*Func_cmd)(CMDARG *, int);
@@ -168,9 +169,10 @@ extern char *(*read_a_line)(const char *prompt);
 extern char *read_commands_string(const char *prompt);
 extern int in_cmd_src(const char *);
 extern int get_eof_status(void);
-extern void push_cmd_src(int fd, int istty, char * (*readfunc)(const char *), int (*closefunc)(int), int cmd, int eofstatus);
+extern void push_cmd_src(int fd, bool istty, char * (*readfunc)(const char *),
+		int (*closefunc)(int), int cmd, int eofstatus);
 extern int pop_cmd_src(void);
-extern int has_break_or_watch_point(int *pnum, int any);
+extern int has_break_or_watch_point(int *pnum, bool any);
 extern int do_list(CMDARG *arg, int cmd);
 extern int do_info(CMDARG *arg, int cmd);
 extern int do_print_var(CMDARG *arg, int cmd);

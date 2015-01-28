@@ -1,7 +1,7 @@
 dnl
 dnl configure.ac --- autoconf input file for gawk
 dnl
-dnl Copyright (C) 1995-2011 the Free Software Foundation, Inc.
+dnl Copyright (C) 1995-2015 the Free Software Foundation, Inc.
 dnl
 dnl This file is part of GAWK, the GNU implementation of the
 dnl AWK Programming Language.
@@ -23,7 +23,7 @@ dnl
 
 dnl Process this file with autoconf to produce a configure script.
 
-AC_INIT([GNU Awk], 4.0.70, bug-gawk@gnu.org, gawk)
+AC_INIT([GNU Awk], 4.1.60, bug-gawk@gnu.org, gawk)
 
 # This is a hack. Different versions of install on different systems
 # are just too different. Chuck it and use install-sh.
@@ -39,8 +39,8 @@ then
 	export INSTALL
 fi
 
-AC_PREREQ(2.68)
-AM_INIT_AUTOMAKE([1.11 dist-xz])
+AC_PREREQ(2.69)
+AM_INIT_AUTOMAKE([1.14 dist-xz dist-lzip])
 
 AC_CONFIG_MACRO_DIR([m4])
 
@@ -58,7 +58,14 @@ AC_ARG_ENABLE([lint], [  --disable-lint	Disable gawk lint checking],
 		AC_DEFINE(NO_LINT, 1, [disable lint checks])
 	fi
 )
+AC_ARG_ENABLE([severe-portability-problems], [  --enable-severe-portability-problems	Enable really nasty portability problems],
+	if test "$enableval" = yes
+	then
+		AC_DEFINE(I_DONT_KNOW_WHAT_IM_DOING, 1, [enable severe portability problems])
+	fi
+)
 
+AC_CANONICAL_HOST
 AC_USE_SYSTEM_EXTENSIONS
 
 dnl checks for programs
@@ -80,7 +87,7 @@ AC_MSG_CHECKING([for special development options])
 if test -f $srcdir/.developing
 then
 	# add other debug flags as appropriate, save GAWKDEBUG for emergencies
-	CFLAGS="$CFLAGS -DARRAYDEBUG"
+	CFLAGS="$CFLAGS -DARRAYDEBUG -DYYDEBUG -DLOCALEDEBUG"
 	if grep dbug $srcdir/.developing
 	then
 		CFLAGS="$CFLAGS -DDBUG"
@@ -90,14 +97,20 @@ then
 	# enable debugging using macros also
 	if test "$GCC" = yes
 	then
-		CFLAGS="$CFLAGS -Wall"
+		CFLAGS="$CFLAGS -Wall -fno-builtin -g3"
 	fi
 	AC_MSG_RESULT([yes])
 else
 	AC_MSG_RESULT([no])
+	CFLAGS="$CFLAGS -DNDEBUG"	# turn off assertions
 fi
 
 AC_SUBST(CFLAGS)
+
+# shared library suffix for dynamic loading:
+AC_SUBST(acl_shlibext)
+# default shared library location
+AC_SUBST([pkgextensiondir], ['${pkglibdir}'])
 
 dnl checks for systems
 AC_ZOS_USS
@@ -116,31 +129,21 @@ dnl Set the programming language for checks. Fortunately,
 dnl this only needs to be set once, since everything is in C.
 AC_LANG([C])
 
-dnl Cygwin doesn't like to get libs with full paths
-dnl since that overrides linking against DLLs.
-case `(uname) 2> /dev/null` in
-*CYGWIN*)
-	with_libiconv_prefix=no
-	with_libintl_prefix=no
-	;;
-*)
-	;;
-esac
-
 dnl initialize GNU gettext
 AM_GNU_GETTEXT([external])
-AM_GNU_GETTEXT_VERSION([0.18.1])
+AM_GNU_GETTEXT_VERSION([0.19.3])
 AM_LANGINFO_CODESET
 gt_LC_MESSAGES
 
 dnl checks for header files
-AC_HEADER_STDC
-AC_HEADER_SYS_WAIT
-AC_HEADER_TIME
 AC_CHECK_HEADERS(arpa/inet.h fcntl.h limits.h locale.h libintl.h mcheck.h \
 	netdb.h netinet/in.h stdarg.h stddef.h string.h \
 	sys/ioctl.h sys/param.h sys/socket.h sys/time.h unistd.h \
 	termios.h stropts.h wchar.h wctype.h)
+AC_HEADER_STDC
+AC_HEADER_STDBOOL
+AC_HEADER_SYS_WAIT
+AC_HEADER_TIME
 
 if test "$ac_cv_header_string_h" = yes
 then
@@ -149,15 +152,18 @@ else
 	AC_CHECK_HEADERS(strings.h)
 fi
 
+dnl Check cross compiling
+AM_CONDITIONAL([TEST_CROSS_COMPILE], [test "x$build_alias" != "x$host_alias"])
+
 dnl checks for typedefs
 AC_TYPE_PID_T
 AC_TYPE_SIGNAL
 AC_SIZE_T
 AC_TYPE_GETGROUPS
-gl_AC_TYPE_LONG_LONG
-gl_AC_TYPE_UNSIGNED_LONG_LONG
-gl_AC_TYPE_INTMAX_T
-gl_AC_TYPE_UINTMAX_T
+AC_TYPE_LONG_LONG_INT
+AC_TYPE_UNSIGNED_LONG_LONG_INT
+AC_TYPE_INTMAX_T
+AC_TYPE_UINTMAX_T
 AC_CHECK_TYPE(ssize_t, int)
 AC_CHECK_SIZEOF(unsigned int)
 AC_CHECK_SIZEOF(unsigned long)
@@ -237,8 +243,10 @@ dnl            AC_MSG_ERROR([Cannot find a type to use in place of socklen_t])
 ])
 TYPE_SOCKLEN_T
 
+dnl Check for C11 _Noreturn
+GAWK_AC_NORETURN
+
 dnl checks for functions
-AC_FUNC_VPRINTF
 AC_FUNC_MKTIME
 case "$ac_cv_func_working_mktime" in
 yes)	AC_DEFINE(HAVE_MKTIME, 1, [we have the mktime function])
@@ -254,8 +262,8 @@ AC_CHECK_LIB(m, fmod)
 AC_CHECK_LIB(m, isinf)
 AC_CHECK_LIB(m, ismod)
 dnl Don't look for libsigsegv on OSF/1, gives us severe headaches
-case `uname` in
-OSF1)	: ;;
+case $host_os in
+osf1)	: ;;
 *)
 	gl_LIBSIGSEGV
 	;;
@@ -265,40 +273,65 @@ esac
 AC_CHECK_FUNCS(atexit btowc fmod getgrent getgroups grantpt \
 	isascii iswctype iswlower iswupper mbrlen \
 	memcmp memcpy memcpy_ulong memmove memset \
-	memset_ulong mkstemp setenv setlocale setsid snprintf strchr \
-	strerror strftime strncasecmp strcoll strtod strtoul \
+	memset_ulong mkstemp posix_openpt setenv setlocale setsid snprintf strchr \
+	strerror strftime strcasecmp strncasecmp strcoll strtod strtoul \
 	system tmpfile towlower towupper tzset usleep wcrtomb \
-	wcscoll wcscoll wctype)
+	wcscoll wctype)
 dnl this check is for both mbrtowc and the mbstate_t type, which is good
 AC_FUNC_MBRTOWC
 
 dnl check for dynamic linking
 dnl This is known to be very primitive
-AC_CHECK_HEADER(dlfcn.h,
-	[AC_DEFINE([DYNAMIC], 1, [dynamic loading is possible])
-	if test "$GCC" = yes
-	then
-		# Add others here as appropriate,
-		# one day use GNU libtool.
-		# 3/2010: Used to have cygwin here but removed since
-		# we get complaints that -export-dynamic doesn't work.
-		if uname | $EGREP -i 'linux|freebsd' > /dev/null
-		then
-			LDFLAGS="$LDFLAGS -export-dynamic"
-		fi
-	fi
+AC_ARG_ENABLE([extensions],
+	[AS_HELP_STRING([--disable-extensions], [disable dynamic extensions (default is detect)])])
+if test "x$enable_extensions" != "xno"; then
+	extensions_supported=no
 
-	# Check this separately. Some systems have dlopen
-	# in libc. Notably freebsd and cygwin.
-	# HP-NSK has it in zrldsrl
-	AC_SEARCH_LIBS(dlopen, dl zrldsrl)
-])
+	dnl On MirBSD (and probably other systems), don't even try.
+	case $host_os in
+	mirbsd* | openedition*)	# OS/390 z/OS POSIX layer
+		cat << \EOF > extension/Makefile
+all dist check clean distclean install uninstall distcheck:
+	@exit 0
+EOF
+		;;
+	*)
+	AC_CHECK_HEADER(dlfcn.h,
+		[
+		# Check this separately. Some systems have dlopen
+		# in libc. Notably freebsd and cygwin.
+		# HP-NSK has it in zrldsrl
+		AC_SEARCH_LIBS(dlopen, dl zrldsrl, gawk_have_dlopen=yes, gawk_have_dlopen=no)
+		# Only do DYNAMIC if we have the lib. z/OS (some versions) have
+		# the header but not the lib, apparently
+		if test "$gawk_have_dlopen" = yes
+		then
+			extensions_supported=yes
+			AC_DEFINE([DYNAMIC], 1, [dynamic loading is possible])
+			# Add -export-dynamic for old extensions. Only works for GCC
+			if test "$GCC" = yes; then
+				case $host_os in
+				linux*|freebsd*)
+					LDFLAGS="$LDFLAGS -Wl,-export-dynamic"
+					;;
+				esac
+			fi
+		fi
+	])
+		;;
+	esac
+
+	if test "x$enable_extensions$extensions_supported" = "xyesno"; then
+		AC_MSG_ERROR([extension support requested, but unavailable])
+	fi
+	enable_extensions=$extensions_supported
+fi
 
 dnl check for how to use getpgrp
 dnl have to hardwire it for VMS POSIX. Sigh.
 dnl ditto for BeOS, OS/2, and MS-DOS.
-case `(uname) 2> /dev/null` in
-*VMS*|*BeOS*|*OS/2*|*MS-DOS*)
+case $host_os in
+vms*|beos*|os2*|msdos)
 	AC_DEFINE(GETPGRP_VOID, 1,
 	  [Define to 1 if the getpgrp function requires zero arguments.])
 	;;
@@ -337,11 +370,13 @@ dnl check for sockets
 GAWK_AC_LIB_SOCKETS
 
 dnl check for readline support
-GNUPG_CHECK_READLINE
+GAWK_CHECK_READLINE
+
+dnl check for mpfr support
+GNUPG_CHECK_MPFR
 
 dnl checks for structure members
-AC_STRUCT_ST_BLKSIZE
-AC_HEADER_TIME
+AC_CHECK_MEMBERS([struct stat.st_blksize])
 AC_STRUCT_TM
 AC_STRUCT_TIMEZONE
 
@@ -355,9 +390,22 @@ AC_C_STRINGIZE
 AC_CONFIG_HEADERS([config.h:configh.in])
 AH_BOTTOM([#include "custom.h"])
 
+dnl Crude but small hack to make plug-ins work on Mac OS X
+dnl We should really use the libtool value for shrext_cmds, but that
+dnl is not available here, since we do not use libtool at the top level.
+case $acl_shlibext in
+dylib)	GAWKLIBEXT=so ;;	# MacOS uses .dylib for shared libraries, but libtool uses .so for modules
+*) GAWKLIBEXT=$acl_shlibext ;;
+esac
+AC_SUBST(GAWKLIBEXT)
+
 AC_CONFIG_FILES(Makefile
 	awklib/Makefile
 	doc/Makefile
+	extras/Makefile
 	po/Makefile.in
 	test/Makefile)
+if test "x$enable_extensions" = "xyes"; then
+	AC_CONFIG_SUBDIRS(extension)
+fi
 AC_OUTPUT

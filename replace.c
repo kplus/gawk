@@ -3,7 +3,7 @@
  */
 
 /* 
- * Copyright (C) 1989, 1991-2011 the Free Software Foundation, Inc.
+ * Copyright (C) 1989, 1991-2013 the Free Software Foundation, Inc.
  * 
  * This file is part of GAWK, the GNU implementation of the
  * AWK Programming Language.
@@ -27,8 +27,7 @@
  * Do all necessary includes here, so that we don't have to worry about
  * overlapping includes in the files in missing.d.
  */
-#include "config.h"
-#include "awk.h"
+#include "awk.h"	/* includes config.h for us */
 
 
 #ifndef HAVE_SYSTEM
@@ -51,7 +50,7 @@
 #include "missing_d/memmove.c"
 #endif	/* HAVE_MEMMOVE */
 
-#ifndef HAVE_STRNCASECMP
+#if !defined(HAVE_STRNCASECMP) || !defined(HAVE_STRCASECMP)
 #include "missing_d/strncasecmp.c"
 #endif	/* HAVE_STRCASE */
 
@@ -110,4 +109,8 @@
 
 #ifndef HAVE_STRCOLL
 #include "missing_d/strcoll.c"
+#endif
+
+#if defined(__DJGPP__)
+#include "missing_d/wcmisc.c"
 #endif

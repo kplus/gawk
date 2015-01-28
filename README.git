@@ -1,4 +1,4 @@
-Mon Oct 24 21:50:18 IST 2011
+Thu Apr 17 16:54:26 IDT 2014
 ============================
 
 If you are reading this, you have retrieved the gawk code base via
@@ -20,10 +20,27 @@ Really.
 
 You can find gawk's GIT repository at Savannah
 https://savannah.gnu.org/git/?group=gawk
-Detailed instructions on using and contributing to gawk can also be
-found there 
-http://savannah.gnu.org/maintenance/UsingGit
 
+Detailed instructions on using and contributing to gawk can also be
+found at Savannah, see http://savannah.gnu.org/maintenance/UsingGit
+
+Thanks,
+
+Arnold Robbins
+Gawk Maintainer
+
+=====================================================================
+Here are some questions and answers related to using git compiled
+by several of the gawk maintainers.
+
+- I don't want to mess with git. Can I just get a tarball of a branch without
+  a lot of hassle?
+
+Yes.  Use something like this:
+
+	wget http://git.savannah.gnu.org/cgit/gawk.git/snapshot/gawk-BRANCH-NAME.tar.gz
+
+Put the right thing in place of BRANCH-NAME.
 
 - How can I check out the GIT repository ?
 
@@ -179,6 +196,13 @@ something to the repository.
   git checkout    my_stuff  # change to branch my_stuff
   git checkout -b my_stuff  # create new branch my_stuff and change to it
 
+- How can I pull patches from a branch ?
+
+  git pull origin feature_branch
+
+The name of the branch can be omitted if your current branch is
+created to track the feature_branch ("git branch -t", see below).
+
 - How can I create a branch ?
 
 For each new feature to be considered for inclusion into future
@@ -187,13 +211,26 @@ branch shall be based on the master branch.
 
   # make master branch the base
   git checkout master
-  git branch my_new_feature_branch
+  # create new feature branch and connect local to upstream branch
+  git branch -t my_new_feature_branch
   touch my_new_file.c
   git add my_new_file.c
   git status
   git commit -m "Created new feature branch."
   git push -u origin my_new_feature_branch
   git checkout my_new_feature_branch
+
+
+- How can I merge recent patches from the master branch ?
+
+My feature branch has been created as describe above (based on master).
+While I committed and pushed up my changes, the master branch has also changed.
+Now I want to catch up with recent changes in the master branch.
+
+  git diff  origin/master                   # What is in master that I don't have ?
+  git merge origin/master                   # Merge all master patches into local rep
+  git push -u origin my_new_feature_branch  # Push these local changes up
+
 
 - How can I throw away an obsolete branch ?
 
@@ -204,11 +241,15 @@ branch shall be based on the master branch.
 
 - I have made stupid changes to a file and want the original back, how ?
 
-  svn checkout file_name.ext
+  git checkout file_name.ext
 
   This will only work if the file was not yet committed.
   If you have already committed the change and want back the
   last pushed version, use "git reset" instead. 
+
+- I have committed stupid changes, how can I  undo the "git commit" ?
+
+  http://stackoverflow.com/questions/927358/git-undo-last-commit
 
 
 - Who changed a specific line in my file ?
@@ -235,8 +276,90 @@ You can inspect the log history file-wise but also directory-wise.
 
   git gc
 
+- How can I change settings with an editor (without "git xxx" command) ?
 
-Thanks,
+This is useful for inspecting the settings of local and remote branches that track each other.
 
-Arnold Robbins
-Gawk Maintainer
+  vi .git/config
+
+- I'm a devoted user of Bazaar, and don't want to switch to git.  Is
+  there any way for me to track Gawk development with bzr?
+
+Yes, there is.  First, install the latest version of bzr (2.5.0 or
+later is required).  If it doesn't come with the bzr-git plugin,
+download and install it from https://launchpad.net/bzr-git.  You will
+also need dulwich, which is a Python implementation of the git
+protocol; get it from http://www.samba.org/~jelmer/dulwich/.
+
+(To know whether you have bzr-git, type "bzr plugins".)
+
+Next, clone the Gawk git repository with this command:
+
+  bzr git-import git://git.savannah.gnu.org/gawk.git gawk
+
+This will create a directory called 'gawk' with meta-data of the
+repository, but without any working trees.  To checkout the files,
+chdir to that directory and type:
+
+  bzr checkout
+
+This will checkout the files for the default branch.  To see the list
+of branches, type
+
+  bzr branches
+
+To switch to another branch, type
+
+  bzr switch --force BRANCH
+
+where BRANCH is the name of the branch, e.g. 'xgawk'.  (The --force
+option is a workaround for an annoying misfeature in bzr 2.5.0, which
+will most probably be resolved in the near future.)
+
+To sync the current branch with upstream, type
+
+  bzr pull
+
+If you want to update several branches, "bzr switch" to each one in
+turn, followed by "bzr pull" to sync the branch.
+
+- How do I manage things if I want to undo a commit?
+
+It depends upon if you have pushed the commit or not. Lots of good
+info is at http://stackoverflow.com/questions/927358/git-undo-last-commit .
+
+- What is the difference between using `git rebase' and `git merge' ?
+
+Both of these can be used to bring one branch up to date with respect
+to another.  For example, if you are working on a feature branch based
+off master, and master has since progressed, you can use
+
+	git checkout feature
+	git merge master
+
+or
+
+	git checkout feature
+	git rebase master
+
+In the end, you will have your changes on top of the current version of
+master in the feature branch.
+
+So which to use?  The answer depends on whether your feature branch
+has been pushed up to the Savannah repo or not.
+
+If your branch is completely local to your machine, use `git rebase'.
+Otherwise, use `git merge'.
+
+- How do I remove branches in my local repo that are no longer in the
+  remote repo?
+
+  Either
+  	git fetch --prune
+  or
+  	git remote prune origin
+
+  These remove the remote branches (i.e., origin/something)
+  that no longer exist on the remote.
+
+  (Thanks to Stepan Kasal for this answer.)

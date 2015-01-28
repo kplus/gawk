@@ -26,12 +26,23 @@
 
 info_TEXINFOS = gawk.texi gawkinet.texi
 
-man_MANS = gawk.1 igawk.1
+man_MANS = gawk.1
 
 EXTRA_DIST = ChangeLog ChangeLog.0 README.card ad.block setter.outline \
 	awkcard.in awkforai.txt texinfo.tex cardfonts \
+	api-figure1.eps api-figure1.fig api-figure1.pdf \
+	api-figure1.png api-figure1.txt \
+	api-figure2.eps api-figure2.fig api-figure2.pdf \
+	api-figure2.png api-figure2.txt \
+	api-figure3.eps api-figure3.fig api-figure3.pdf \
+	api-figure3.png api-figure3.txt \
+	array-elements.eps array-elements.fig array-elements.pdf \
+	array-elements.png array-elements.txt \
+	gawktexi.in sidebar.awk \
 	general-program.eps general-program.fig general-program.pdf \
+	general-program.png general-program.txt \
 	process-flow.eps process-flow.fig process-flow.pdf \
+	process-flow.png process-flow.txt \
 	macros colors no.colors $(man_MANS) \
 	lflashlight-small.xpic lflashlight.eps lflashlight.pdf \
 	rflashlight-small.xpic rflashlight.eps rflashlight.pdf \
@@ -39,7 +50,7 @@ EXTRA_DIST = ChangeLog ChangeLog.0 README.card ad.block setter.outline \
 	bc_notes
 
 # Get rid of generated files when cleaning
-CLEANFILES = *.ps *.html *.dvi *~ awkcard.nc awkcard.tr gawk.pdf gawkinet.pdf awkcard.pdf gawk.1.pdf igawk.1.pdf
+CLEANFILES = *.ps *.html *.dvi *~ awkcard.nc awkcard.tr gawk.pdf gawkinet.pdf awkcard.pdf gawk.1.pdf
 
 MAKEINFO = @MAKEINFO@ --no-split --force
 
@@ -61,43 +72,24 @@ AWKCARD = awkcard.ps
 # to ensure that awkcard.tr is processed by tbl.
 #AWKCARD = awkcard.nc
 
-# The following is patterned after the main Makefile.am.  The point is to
-# make pgawk.1 a link to gawk.1 in the installed man directory.
+gawk.texi: $(srcdir)/gawktexi.in $(srcdir)/sidebar.awk
+	awk -f $(srcdir)/sidebar.awk < $(srcdir)/gawktexi.in > gawk.texi
 
-# We want hard links for install-data-hook, below
-LN= ln -f
+postscript: gawk.ps gawkinet.ps gawk.1.ps $(AWKCARD)
 
-# Link gawk.1 to pgawk.1
-install-data-hook:
-	(cd $(DESTDIR)$(man1dir); \
-	$(LN) gawk.1 pgawk.1 2>/dev/null ; \
-	exit 0)
-
-# Undo the above when uninstalling
-uninstall-hook:
-	cd $(DESTDIR)$(man1dir); rm -f pgawk.1 ; exit 0
-
-postscript: gawk.ps gawkinet.ps gawk.1.ps igawk.1.ps $(AWKCARD)
-
-pdf: postscript gawk.pdf gawkinet.pdf awkcard.pdf gawk.1.pdf igawk.1.pdf
+pdf: postscript gawk.pdf gawkinet.pdf awkcard.pdf gawk.1.pdf
 
 gawk.ps: gawk.dvi
-	dvips -o gawk.ps gawk.dvi
+	TEXINPUTS=$(srcdir): dvips -o gawk.ps gawk.dvi
 
 gawkinet.ps: gawkinet.dvi
-	dvips -o gawkinet.ps gawkinet.dvi
+	TEXINPUTS=$(srcdir): dvips -o gawkinet.ps gawkinet.dvi
 
 gawk.1.ps: gawk.1
 	-groff -man $(srcdir)/gawk.1 > gawk.1.ps
 
 gawk.1.pdf: gawk.1.ps
 	ps2pdf gawk.1.ps gawk.1.pdf
-
-igawk.1.ps: igawk.1
-	-groff -man $(srcdir)/igawk.1 > igawk.1.ps
-
-igawk.1.pdf: igawk.1.ps
-	ps2pdf igawk.1.ps igawk.1.pdf
 
 awkcard.tr: awkcard.in
 	sed 's:SRCDIR:$(srcdir):' < $(srcdir)/awkcard.in > awkcard.tr

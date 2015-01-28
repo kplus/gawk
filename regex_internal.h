@@ -1,5 +1,5 @@
 /* Extended regular expression matching and search library.
-   Copyright (C) 2002-2005, 2007, 2008, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Isamu Hasegawa <isamu@yamato.ibm.com>.
 
@@ -14,9 +14,8 @@
    Lesser General Public License for more details.
 
    You should have received a copy of the GNU Lesser General Public
-   License along with the GNU C Library; if not, write to the Free
-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
-   02111-1307 USA.  */
+   License along with the GNU C Library; if not, see
+   <http://www.gnu.org/licenses/>.  */
 
 #ifndef _REGEX_INTERNAL_H
 #define _REGEX_INTERNAL_H 1
@@ -91,7 +90,7 @@ is_blank (int c)
 # ifdef _LIBC
 #  undef gettext
 #  define gettext(msgid) \
-  INTUSE(__dcgettext) (_libc_intl_domainname, msgid, LC_MESSAGES)
+  __dcgettext (_libc_intl_domainname, msgid, LC_MESSAGES)
 # endif
 #else
 # define gettext(msgid) (msgid)
@@ -108,9 +107,7 @@ is_blank (int c)
 # define SIZE_MAX ((size_t) -1)
 #endif
 
-#include "mbsupport.h" /* gawk */
-
-#if MBS_SUPPORT || _LIBC
+#if ! defined(__DJGPP__) && (defined(GAWK) || _LIBC)
 # define RE_ENABLE_I18N
 #endif
 
@@ -156,6 +153,7 @@ is_blank (int c)
 # define __attribute(arg) __attribute__ (arg)
 #else
 # define __attribute(arg)
+# define __attribute__(arg)	/* GAWK: They left this out. Duh. */
 #endif
 
 #ifdef GAWK
@@ -418,7 +416,7 @@ typedef struct re_dfa_t re_dfa_t;
 
 #ifndef _LIBC
 # ifdef __i386__
-#  define internal_function   __attribute ((regparm (3), stdcall))
+#  define internal_function   __attribute__ ((regparm (3), stdcall))
 # else
 #  define internal_function
 # endif
@@ -437,7 +435,7 @@ static void build_upper_buffer (re_string_t *pstr) internal_function;
 static void re_string_translate_buffer (re_string_t *pstr) internal_function;
 static unsigned int re_string_context_at (const re_string_t *input, int idx,
 					  int eflags)
-     internal_function __attribute ((pure));
+     internal_function __attribute__ ((pure));
 #endif
 #define re_string_peek_byte(pstr, offset) \
   ((pstr)->mbs[(pstr)->cur_idx + offset])
@@ -727,7 +725,7 @@ typedef struct
 
 
 /* Inline functions for bitset operation.  */
-static inline void
+static void __attribute__ ((unused))
 bitset_not (bitset_t set)
 {
   int bitset_i;
@@ -735,7 +733,7 @@ bitset_not (bitset_t set)
     set[bitset_i] = ~set[bitset_i];
 }
 
-static inline void
+static void __attribute__ ((unused))
 bitset_merge (bitset_t dest, const bitset_t src)
 {
   int bitset_i;
@@ -743,7 +741,7 @@ bitset_merge (bitset_t dest, const bitset_t src)
     dest[bitset_i] |= src[bitset_i];
 }
 
-static inline void
+static void __attribute__ ((unused))
 bitset_mask (bitset_t dest, const bitset_t src)
 {
   int bitset_i;
@@ -753,8 +751,8 @@ bitset_mask (bitset_t dest, const bitset_t src)
 
 #ifdef RE_ENABLE_I18N
 /* Inline functions for re_string.  */
-static inline int
-internal_function __attribute ((pure))
+static int
+internal_function __attribute__ ((pure, unused))
 re_string_char_size_at (const re_string_t *pstr, int idx)
 {
   int byte_idx;
@@ -766,8 +764,8 @@ re_string_char_size_at (const re_string_t *pstr, int idx)
   return byte_idx;
 }
 
-static inline wint_t
-internal_function __attribute ((pure))
+static wint_t
+internal_function __attribute__ ((pure, unused))
 re_string_wchar_at (const re_string_t *pstr, int idx)
 {
   if (pstr->mb_cur_max == 1)
@@ -777,13 +775,12 @@ re_string_wchar_at (const re_string_t *pstr, int idx)
 
 # ifndef NOT_IN_libc
 static int
-internal_function __attribute ((pure))
+internal_function __attribute__ ((pure, unused))
 re_string_elem_size_at (const re_string_t *pstr, int idx)
 {
 #  ifdef _LIBC
   const unsigned char *p, *extra;
   const int32_t *table, *indirect;
-  int32_t tmp;
 #   include <locale/weight.h>
   uint_fast32_t nrules = _NL_CURRENT_WORD (LC_COLLATE, _NL_COLLATE_NRULES);
 
@@ -795,7 +792,7 @@ re_string_elem_size_at (const re_string_t *pstr, int idx)
       indirect = (const int32_t *) _NL_CURRENT (LC_COLLATE,
 						_NL_COLLATE_INDIRECTMB);
       p = pstr->mbs + idx;
-      tmp = findidx (&p);
+      findidx (&p, pstr->len - idx);
       return p - pstr->mbs - idx;
     }
   else

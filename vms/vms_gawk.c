@@ -1,6 +1,7 @@
 /* vms_gawk.c -- parse GAWK command line using DCL syntax
 
-   Copyright (C) 1991-1993, 1996, 2003, 2005, 2011 the Free Software Foundation, Inc.
+   Copyright (C) 1991-1993, 1996, 2003, 2005, 2011, 2014
+   the Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -37,21 +38,21 @@
 #define Present(arg)		vmswork(Cli_Present(arg))
 #define Get_Value(arg,buf,siz)	vmswork(Cli_Get_Value(arg,buf,siz))
 
-#ifndef __ia64__
-extern void   gawk_cmd();	/* created with $ SET COMMAND/OBJECT */
-#define GAWK_CMD ((const void *)gawk_cmd)
-#else	/* linker on Itanium is much pickier about such things */
+#ifndef __DECC
+extern void   GAWK_CMD();	/* created with $ SET COMMAND/OBJECT */
+#define gawk_cmd ((const void *)GAWK_CMD) */
+#else	/* Use ANSI definitions for DEC C */
 #pragma extern_model save
 #pragma extern_model strict_refdef
 /* (could use globalvalue rather than _refdef if we omit GAWK_CMD's `&') */
-extern void  *gawk_cmd;
+extern void  *GAWK_CMD;
 #pragma extern_model restore
-#define GAWK_CMD ((const void *)&gawk_cmd)
+#define gawk_cmd ((const void *)&GAWK_CMD)
 #endif
 extern void   _exit(int);
 static int    vms_usage(int);
 
-static const char *CmdName;	/* "GAWK", "DGAWK", or "PGAWK" */
+static const char *CmdName = "GAWK";
 
 #define ARG_SIZ 250
 union arg_w_prefix {	/* structure used to simplify prepending of "-" */
@@ -80,10 +81,6 @@ vms_gawk()
     int native_dcl = 1,	/* assume true until we know otherwise */
 	short_circ;	/* some options make P1, /commands, /input superfluous */
 
-    CmdName = (which_gawk == exe_profiling) ? "PGAWK"
-	      : (which_gawk == exe_debugging) ? "DGAWK"
-	      : "GAWK";
-
     /* check "GAWK_P1"--it's required; its presence will tip us off */
     sts = Cli_Present("GAWK_P1");
     if (CondVal(sts) == CondVal(CLI$_SYNTAX)) {
@@ -92,13 +89,13 @@ vms_gawk()
 	   command, so we'll now attempt to generate a command from the
 	   foreign command string and parse that.
 	*/
-	sts = Cli_Parse_Command(GAWK_CMD, "GAWK");	/* (*not* CmdName) */
+	sts = Cli_Parse_Command(gawk_cmd, "GAWK");	/* (*not* CmdName) */
 	if (vmswork(sts))
 	    sts = Cli_Present("GAWK_P1");
     }
     short_circ = Present("USAGE") || Present("VERSION") || Present("COPYRIGHT");
     if (vmswork(sts))		/* command parsed successfully */
-	v_add_arg(argc = 0, CmdName);	/* save "GAWK|DGAWK|PGAWK" as argv[0] */
+	v_add_arg(argc = 0, CmdName);	/* save "GAWK" as argv[0] */
     else if (CondVal(sts) == CondVal(CLI$_INSFPRM))
 	/* vms_usage() will handle /usage, /version, and /copyright */
 	return short_circ ? vms_usage(0)
@@ -245,7 +242,7 @@ options: /FIELD_SEPARATOR=\"FS_value\" \n\
 	complaint = 0;			/* clean exit */
     } else if (Present("VERSION") || Present("COPYRIGHT")) {
 	/* construct a truncated Unix-style command line to control main() */
-	v_add_arg(argc=0, CmdName);	/* save "GAWK",&c as argv[0] */
+	v_add_arg(argc=0, CmdName);	/* save "GAWK" as argv[0] */
 #if 0
 	v_add_arg(++argc, Present("VERSION") ? "-V" : "-C");
 #else

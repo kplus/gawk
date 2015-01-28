@@ -1,5 +1,5 @@
 /* Extended regular expression matching and search library.
-   Copyright (C) 2002, 2003, 2005 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Isamu Hasegawa <isamu@yamato.ibm.com>.
 
@@ -14,9 +14,8 @@
    Lesser General Public License for more details.
 
    You should have received a copy of the GNU Lesser General Public
-   License along with the GNU C Library; if not, write to the Free
-   Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
-   02110-1301 USA.  */
+   License along with the GNU C Library; if not, see
+   <http://www.gnu.org/licenses/>.  */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -57,6 +56,11 @@
    #undefs RE_DUP_MAX and sets it to the right value.  */
 #include <limits.h>
 
+/* This header defines the MIN and MAX macros.  */
+#ifdef HAVE_SYS_PARAM_H
+#include <sys/param.h>
+#endif /* HAVE_SYS_PARAM_H */
+
 #ifdef GAWK
 #undef alloca
 #define alloca alloca_is_bad_you_should_never_use_it
@@ -65,10 +69,8 @@
 #include "regex_internal.h"
 
 #include "regex_internal.c"
-#ifdef GAWK
-#define bool int
-#define true (1)
-#define false (0)
+#ifndef HAVE_STDBOOL_H
+#include "missing_d/gawkbool.h"
 #endif
 #include "regcomp.c"
 #include "regexec.c"

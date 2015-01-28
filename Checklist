@@ -1,8 +1,9 @@
-Mon May 16 17:36:21 IDT 2011
+Fri Apr  4 11:43:29 IDT 2014
 ============================
 
 A checklist for making releases
 
+The regtest test and other non-standard tests all pass
 Copyright dates in all files updated
 	main.c - copyright message too!
 ChangeLogs in place and updated
@@ -11,29 +12,36 @@ README_d/* edited
 VMS/* version stuff up to date
 	vms/vmsbuild.com
 	vms/descrip.mms
-	vms/vms-conf.h: update VERSION and PACKAGE_VERSION
 NEWS is up to date
 Any new options have been added to usage function
 All paper work signed and sent in
 All files checked in
 Version information is correct in
-	version.c
 	doc/gawk.1
 	doc/awkcard.in
-	doc/gawk.texi
+	doc/gawktexi.in
 	doc/gawkinet.texi
+	extension/configure.ac
 doc/texinfo.tex is up to date
-doc/gawk.texi is up to date
+doc/gawktexi.in is up to date
 doc/gawkinet.texi is up to date
 doc/gawk.1 is up to date
 doc/awkcard.in is up to date
+Run prepinfo on the manual.
+Spell check the manual.
 test/Makefile.am: order and prettify lists of tests
+API Version numbers have been modified correctly in gawkapi.h.
 
 Testing on
 	make clean
 	make distclean
 	make maintainer-clean
 	make release
+
+	compile with tcc
+	compile with clang
+
+	compile 32 bit tests - clang and gcc
 
 	configure --disable-lint
 	configure --disable-nls

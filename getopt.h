@@ -1,6 +1,5 @@
 /* Declarations for getopt.
-   Copyright (C) 1989-1994,1996-1999,2001,2003,2004
-   Free Software Foundation, Inc.
+   Copyright (C) 1989-2015 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,9 +13,8 @@
    Lesser General Public License for more details.
 
    You should have received a copy of the GNU Lesser General Public
-   License along with the GNU C Library; if not, write to the Free
-   Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
-   02110-1301 USA.  */
+   License along with the GNU C Library; if not, see
+   <http://www.gnu.org/licenses/>.  */
 
 #ifndef _GETOPT_H
 
@@ -49,6 +47,21 @@
 #ifdef	__cplusplus
 extern "C" {
 #endif
+
+#ifdef __KLIBC__
+/* OS/2 kLIBC has already getopt(). So to avoid name clash, rename
+   them here. */
+
+# define optarg		gawk_optarg
+# define optind		gawk_optind
+# define opterr		gawk_opterr
+# define optopt		gawk_optopt
+
+# define getopt				gawk_getopt
+# define getopt_long		gawk_getopt_long
+# define getopt_long_only	gawk_getopt_long_only
+#endif
+
 
 /* For communication from `getopt' to the caller.
    When `getopt' finds an option that takes an argument,
@@ -158,9 +171,9 @@ extern int getopt (int ___argc, char *const *___argv, const char *__shortopts)
    additional functionality can be disable at runtime.  This redirection
    helps to also do this at runtime.  */
 #  ifdef __REDIRECT
-  extern int __REDIRECT (getopt, (int ___argc, char *const *___argv,
-				  const char *__shortopts),
-			 __posix_getopt) __THROW;
+  extern int __REDIRECT_NTH (getopt, (int ___argc, char *const *___argv,
+				      const char *__shortopts),
+			     __posix_getopt);
 #  else
 extern int __posix_getopt (int ___argc, char *const *___argv,
 			   const char *__shortopts) __THROW;

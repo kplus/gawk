@@ -1,9 +1,9 @@
 /*
- * command.y - yacc/bison parser for debugger command 
+ * command.y - yacc/bison parser for debugger commands.
  */
 
 /* 
- * Copyright (C) 2004, 2010, 2011 the Free Software Foundation, Inc.
+ * Copyright (C) 2004, 2010, 2011, 2014 the Free Software Foundation, Inc.
  * 
  * This file is part of GAWK, the GNU implementation of the
  * AWK Programming Language.
@@ -37,24 +37,24 @@ static void yyerror(const char *mesg, ...);
 
 static int find_command(const char *token, size_t toklen);
 
-static int want_nodeval = FALSE;
+static bool want_nodeval = false;
 
-static int cmd_idx = -1;			/* index of current command in cmd table */
-static int repeat_idx = -1;			/* index of last repeatable command in command table */
+static int cmd_idx = -1;		/* index of current command in cmd table */
+static int repeat_idx = -1;		/* index of last repeatable command in command table */
 static CMDARG *arg_list = NULL;		/* list of arguments */ 
 static long errcount = 0;
 static char *lexptr_begin = NULL;
-static int in_commands = FALSE;
+static bool in_commands = false;
 static int num_dim;
 
-static int in_eval = FALSE;
+static bool in_eval = false;
 static const char start_EVAL[] = "function @eval(){";
 static const char end_EVAL[] = "}";	
 static CMDARG *append_statement(CMDARG *stmt_list, char *stmt);
-static char *next_word(char *p, int len, char **endp);
 static NODE *concat_args(CMDARG *a, int count);
 
 #ifdef HAVE_LIBREADLINE
+static char *next_word(char *p, int len, char **endp);
 static void history_expand_line(char **line);
 static char *command_generator(const char *text, int state);
 static char *srcfile_generator(const char *text, int state);
@@ -108,7 +108,7 @@ input
 	| input line
 	  {
 		cmd_idx = -1;
-		want_nodeval = FALSE;
+		want_nodeval = false;
 		if (lexptr_begin != NULL) {
 			if (input_from_tty && lexptr_begin[0] != '\0')
 				add_history(lexptr_begin);
@@ -128,7 +128,7 @@ line
 	  {
 		if (errcount == 0 && cmd_idx >= 0) {
 			Func_cmd cmdfunc;
-			int terminate = FALSE;
+			bool terminate = false;
 			CMDARG *args;
 			int ctype = 0;
 			
@@ -162,7 +162,7 @@ line
 			if (in_commands)
 				cmdfunc = do_commands;
 			cmd_idx = -1;
-			want_nodeval = FALSE;
+			want_nodeval = false;
 
 			args = arg_list;
 			arg_list = NULL;
@@ -209,7 +209,7 @@ break_cmd
 
 /* mid-rule action buried in non-terminal to avoid conflict */
 set_want_nodeval
-	: { want_nodeval = TRUE; }
+	: { want_nodeval = true; }
 	;
 
 eval_prologue
@@ -220,12 +220,13 @@ eval_prologue
 			 * non-terminal (empty rule action). See below.
 			 */
 			if (input_from_tty) {
-				dPrompt = eval_Prompt;
-				fprintf(out_fp, _("Type (g)awk statement(s). End with the command \"end\"\n"));
+				dbg_prompt = eval_prompt;
+				fprintf(out_fp,
+		_("Type (g)awk statement(s). End with the command \"end\"\n"));
 				rl_inhibit_completion = 1;
 			}
 			cmd_idx = -1;
-			in_eval = TRUE;
+			in_eval = true;
 		}
 	  }
 	;
@@ -256,11 +257,11 @@ eval_cmd
 			str[len - 2] = '\0';
 		}
 		if (input_from_tty) {
-			dPrompt = in_commands ? commands_Prompt : dgawk_Prompt;
+			dbg_prompt = in_commands ? commands_prompt : dgawk_prompt;
 			rl_inhibit_completion = 0;
 		}
 		cmd_idx = find_command("eval", 4);
-		in_eval = FALSE;
+		in_eval = false;
 	  }
 	| D_EVAL set_want_nodeval string_node
 	  {
@@ -301,17 +302,17 @@ command
 	  }
 	| D_IGNORE plus_integer D_INT
 	| D_ENABLE enable_args
-	| D_PRINT { want_nodeval = TRUE; } print_args
-	| D_PRINTF { want_nodeval = TRUE; } printf_args
+	| D_PRINT { want_nodeval = true; } print_args
+	| D_PRINTF { want_nodeval = true; } printf_args
 	| D_LIST list_args
 	| D_UNTIL location
 	| D_CLEAR location
 	| break_cmd break_args 
-	| D_SET { want_nodeval = TRUE; } variable '=' node
+	| D_SET { want_nodeval = true; } variable '=' node
 	| D_OPTION option_args
-	| D_RETURN { want_nodeval = TRUE; } opt_node
-	| D_DISPLAY { want_nodeval = TRUE; } opt_variable
-	| D_WATCH { want_nodeval = TRUE; } variable condition_exp
+	| D_RETURN { want_nodeval = true; } opt_node
+	| D_DISPLAY { want_nodeval = true; } opt_variable
+	| D_WATCH { want_nodeval = true; } variable condition_exp
 	| d_cmd opt_integer_list
 	| D_DUMP opt_string
 	| D_SOURCE D_STRING
@@ -336,14 +337,14 @@ command
 			;
 		else if (in_commands)
 			yyerror(_("Can't use command `commands' for breakpoint/watchpoint commands"));
-		else if ($2 == NULL &&  ! (type = has_break_or_watch_point(&num, TRUE)))
+		else if ($2 == NULL &&  ! (type = has_break_or_watch_point(&num, true)))
 			yyerror(_("no breakpoint/watchpoint has been set yet"));
-		else if ($2 != NULL && ! (type = has_break_or_watch_point(&num, FALSE)))
+		else if ($2 != NULL && ! (type = has_break_or_watch_point(&num, false)))
 			yyerror(_("invalid breakpoint/watchpoint number"));
 		if (type) {
-			in_commands = TRUE;
+			in_commands = true;
 			if (input_from_tty) {
-				dPrompt = commands_Prompt; 
+				dbg_prompt = commands_prompt; 
 				fprintf(out_fp, _("Type commands for when %s %d is hit, one per line.\n"),
 								(type == D_break) ? "breakpoint" : "watchpoint", num);
 				fprintf(out_fp, _("End with the command \"end\"\n"));
@@ -356,8 +357,8 @@ command
 			yyerror(_("`end' valid only in command `commands' or `eval'"));
 		else {
 			if (input_from_tty)
-				dPrompt = dgawk_Prompt;	
-			in_commands = FALSE;
+				dbg_prompt = dgawk_prompt;	
+			in_commands = false;
 		}
 	  }
 	| D_SILENT
@@ -377,11 +378,11 @@ command
 			$2->a_argument = argtab[idx].value;
 		}
 	  }
-	| D_CONDITION plus_integer { want_nodeval = TRUE; } condition_exp
+	| D_CONDITION plus_integer { want_nodeval = true; } condition_exp
 	  {
 		int type;
 		int num = $2->a_int;
-		type = has_break_or_watch_point(&num, FALSE);
+		type = has_break_or_watch_point(&num, false);
 		if (! type)
 			yyerror(_("condition: invalid breakpoint/watchpoint number"));
 	  }
@@ -492,9 +493,9 @@ location
 break_args
 	: /* empty */
 	  { $$ = NULL; }	
-	| plus_integer { want_nodeval = TRUE; } condition_exp
+	| plus_integer { want_nodeval = true; } condition_exp
 	| func_name 
-	| D_STRING ':' plus_integer { want_nodeval = TRUE; } condition_exp
+	| D_STRING ':' plus_integer { want_nodeval = true; } condition_exp
 	| D_STRING ':' func_name
 	;
 
@@ -685,7 +686,7 @@ node
 		if ((n->flags & NUMBER) == 0)
 			yyerror(_("non-numeric value found, numeric expected"));
 		else
-			$2->a_node->numbr = - n->numbr;
+			negate_num(n);
 		$$ = $2;
 	  }
 	;
@@ -896,6 +897,8 @@ struct cmdtoken cmdtab[] = {
 	gettext_noop("up [N] - move N frames up the stack.") },
 { "watch", "w", D_watch, D_WATCH, do_watch,
 	gettext_noop("watch var - set a watchpoint for a variable.") },
+{ "where", "", D_backtrace, D_BACKTRACE, do_backtrace,
+	gettext_noop("where [N] - (same as backtrace) print trace of all or N innermost (outermost if N < 0) frames.") },
 { NULL, NULL, D_illegal, 0, (Func_cmd) 0,
 	 NULL },
 };
@@ -915,7 +918,7 @@ struct argtoken argtab[] = {
 	{ "sources", D_info, A_SOURCES },
 	{ "variables", D_info, A_VARIABLES },
 	{ "watch", D_info, A_WATCH },
-	{ NULL, D_illegal, 0 },
+	{ NULL, D_illegal, A_NONE },
 };
 
 
@@ -1037,7 +1040,7 @@ yylex(void)
 
 	if (lexptr_begin == NULL) {
 again:
-		lexptr_begin = read_a_line(dPrompt);
+		lexptr_begin = read_a_line(dbg_prompt);
 		if (lexptr_begin == NULL) {	/* EOF or error */
 			if (get_eof_status() == EXIT_FATAL) 
 				exit(EXIT_FATAL);
@@ -1111,7 +1114,7 @@ again:
 		}
 
 		while (c != '\0' && c != ' ' && c != '\t') {
-			if (! isalpha(c) && ! in_eval) {
+			if (! is_alpha(c) && ! in_eval) {
 				yyerror(_("invalid character in command"));
 				return '\n';
 			}
@@ -1164,7 +1167,7 @@ again:
 	if (c == '"') {
 		char *str, *p;
 		int flags = ALREADY_MALLOCED;
-		int esc_seen = FALSE;
+		bool esc_seen = false;
 
 		toklen = lexend - lexptr;
 		emalloc(str, char *, toklen + 2, "yylex");
@@ -1179,7 +1182,7 @@ err:
 			}
 			if (c == '\\') {
 				c = *++lexptr;
-				esc_seen = TRUE;
+				esc_seen = true;
 				if (want_nodeval || c != '"')
 					*p++ = '\\';
 			}
@@ -1238,22 +1241,37 @@ err:
 		return D_STRING;
 	}
 
-	/* assert(want_nodval == TRUE); */
-
 	/* look for awk number */
 
 	if (isdigit((unsigned char) tokstart[0])) {
-		double d;
+		NODE *r = NULL;
 
 		errno = 0;
-		d = strtod(tokstart, &lexptr);
+#ifdef HAVE_MPFR
+		if (do_mpfr) {
+			int tval;
+			r = mpg_float();
+			tval = mpfr_strtofr(r->mpg_numbr, tokstart, & lexptr, 0, ROUND_MODE);
+			IEEE_FMT(r->mpg_numbr, tval);
+			if (mpfr_integer_p(r->mpg_numbr)) {
+				/* integral value, convert to a GMP type. */
+				NODE *tmp = r;
+				r = mpg_integer();
+				mpfr_get_z(r->mpg_i, tmp->mpg_numbr, MPFR_RNDZ);
+				unref(tmp);
+			}			
+		} else 
+#endif
+			r = make_number(strtod(tokstart, & lexptr));
+
 		if (errno != 0) {
 			yyerror(strerror(errno));
+			unref(r);
 			errno = 0;
 			return '\n';
 		}
 		yylval = mk_cmdarg(D_node);
-		yylval->a_node = make_number(d);
+		yylval->a_node = r;
 		append_cmdarg(yylval);
 		return D_NODE;
 	}
@@ -1264,12 +1282,12 @@ err:
 			|| c == ',' || c == '=')
 		return *lexptr++;
 
-	if (c != '_' && ! isalpha(c)) {
+	if (c != '_' && ! is_alpha(c)) {
 		yyerror(_("invalid character"));
 		return '\n';
 	}
 
-	while (isalnum(c) || c == '_')
+	while (is_identchar(c))
 		c = *++lexptr;
 	toklen = lexptr - tokstart;
 
@@ -1361,7 +1379,7 @@ find_command(const char *token, size_t toklen)
 {
 	char *name, *abrv;
 	int i, k;
-	int try_exact = TRUE;
+	bool try_exact = true;
 	int abrv_match = -1;
 	int partial_match = -1;
 
@@ -1385,7 +1403,7 @@ find_command(const char *token, size_t toklen)
 			return i;
 
 		if (*name > *token || i == (k - 1))
-			try_exact = FALSE;
+			try_exact = false;
 
 		if (abrv_match < 0) {
 			abrv = cmdtab[i].abbrvn;
@@ -1433,15 +1451,17 @@ do_help(CMDARG *arg, int cmd)
 		i = find_command(name, strlen(name));
 		if (i >= 0) {
 			fprintf(out_fp, "%s\n", cmdtab[i].help_txt);
-			if (STREQ(cmdtab[i].name, "option"))
+			if (strcmp(cmdtab[i].name, "option") == 0)
 				option_help();
 		} else
 			fprintf(out_fp, _("undefined command: %s\n"), name);
 	}
 
-	return FALSE;
+	return false;
 }
 
+
+#ifdef HAVE_LIBREADLINE
 
 /* next_word --- find the next word in a line to complete 
  *               (word seperation characters are space and tab).
@@ -1469,8 +1489,6 @@ next_word(char *p, int len, char **endp)
 	return p;
 }
 
-#ifdef HAVE_LIBREADLINE
-
 /* command_completion --- attempt to complete based on the word number in line;
  *    try to complete on command names if this is the first word; for the next
  *    word(s), the type of completion depends on the command name (first word).
@@ -1488,7 +1506,7 @@ command_completion(const char *text, int start, int end)
 	int idx;
 	int len;
 
-	rl_attempted_completion_over = TRUE;	/* no default filename completion please */
+	rl_attempted_completion_over = true;	/* no default filename completion please */
 
 	this_cmd = D_illegal;
 	len = start;

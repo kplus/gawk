@@ -3,7 +3,7 @@
  */
 
 /* 
- * Copyright (C) 2004, 2010, 2011 the Free Software Foundation, Inc.
+ * Copyright (C) 2004, 2010-2013 the Free Software Foundation, Inc.
  * 
  * This file is part of GAWK, the GNU implementation of the
  * AWK Programming Language.
@@ -30,7 +30,7 @@
 #include <fcntl.h>	/* open() */
 #endif
 
-extern int exiting;
+extern bool exiting;
 extern SRCFILE *srcfiles;
 extern INSTRUCTION *rule_list;
 extern INSTRUCTION *code_block;
@@ -40,7 +40,6 @@ extern FILE *output_fp;
 extern IOBUF *curfile;
 extern const char *command_file;
 extern const char *get_spec_varname(Func_ptr fptr);
-extern int r_interpret(INSTRUCTION *);
 extern int zzparse(void);
 #define read_command()		(void) zzparse()
 
@@ -50,11 +49,11 @@ static char *linebuf = NULL;	/* used to print a single line of source */
 static size_t linebuf_len;
 
 FILE *out_fp;
-char *dPrompt;
-char *commands_Prompt = "> ";	/* breakpoint or watchpoint commands list */
-char *eval_Prompt = "@> ";		/* awk statement(s) */
+char *dbg_prompt;
+char *commands_prompt = "> ";	/* breakpoint or watchpoint commands list */
+char *eval_prompt = "@> ";	/* awk statement(s) */
 
-int input_from_tty = FALSE;
+bool input_from_tty = false;
 int input_fd;
 
 static SRCFILE *cur_srcfile;
@@ -62,7 +61,7 @@ static long cur_frame = 0;
 static INSTRUCTION *cur_pc;
 int cur_rule = 0;
 
-static int prog_running = FALSE;
+static bool prog_running = false;
 
 struct condition {
 	INSTRUCTION *code;
@@ -90,7 +89,7 @@ typedef struct break_point {
 	INSTRUCTION *bpi;	/* Op_breakpoint */
 
 	struct commands_item commands;  /* list of commands to run */
-	int silent;
+	bool silent;
 
 	struct condition cndn;
 
@@ -108,6 +107,12 @@ static BREAKPOINT breakpoints = { &breakpoints, &breakpoints, 0 };
 /* do_save -- save command */
 static int sess_history_base = 0;
 #endif
+
+#ifndef HAVE_HISTORY_LIST
+#define HIST_ENTRY void
+#define history_list()	NULL
+#endif
+
 
 /* 'list' command */
 static int last_printed_line = 0;
@@ -169,12 +174,12 @@ static struct {
 
 	INSTRUCTION *pc;     /* 'until' and 'return' commands */
 	int repeat_count;    /* 'step', 'next', 'stepi', 'nexti' commands */
-	int print_frame;     /* print frame info,  'finish' and 'until' */
-	int print_ret;       /* print returned value, 'finish' */ 
+	bool print_frame;    /* print frame info,  'finish' and 'until' */
+	bool print_ret;      /* print returned value, 'finish' */ 
 	int break_point;     /* non-zero (breakpoint number) if stopped at break point */
 	int watch_point;     /* non-zero (watchpoint number) if stopped at watch point */
 
-	int (*check_func)(INSTRUCTION **);  /* function to decide when to suspend
+	int (*check_func)(INSTRUCTION **);      /* function to decide when to suspend
 	                                         * awk interpreter and return control
 	                                         * to debugger command interpreter.
 	                                         */
@@ -185,7 +190,7 @@ static struct {
 
 /* restart related stuff */
 extern char **d_argv;	/* copy of argv array */
-static int need_restart = FALSE;
+static bool need_restart = false;
 enum { BREAK=1, WATCH, DISPLAY, HISTORY, OPTION };
 static const char *const env_variable[] = {
 "",
@@ -214,9 +219,9 @@ struct dbg_option {
 	const char *help_txt; 
 };
 
-#define DEFAULT_HISTFILE	"./.dgawk_history"
-#define DEFAULT_OPTFILE		"./.dgawkrc"
-#define DEFAULT_PROMPT		"dgawk> "
+#define DEFAULT_HISTFILE	"./.gawk_history"
+#define DEFAULT_OPTFILE		"./.gawkrc"
+#define DEFAULT_PROMPT		"gawk> "
 #define DEFAULT_LISTSIZE	15
 #define DEFAULT_HISTSIZE	100
 
@@ -232,14 +237,14 @@ static const char *options_file = DEFAULT_OPTFILE;
 static const char *history_file = DEFAULT_HISTFILE;
 #endif
 
-/* keep all option variables in one place */
+/* debugger option related variables */
 
 static char *output_file = "/dev/stdout";  /* gawk output redirection */
-char *dgawk_Prompt = NULL;          /* initialized in interpret */
+char *dgawk_prompt = NULL;                 /* initialized in interpret */
 static int list_size = DEFAULT_LISTSIZE;   /* # of lines that 'list' prints */
-static int do_trace = FALSE;
-static int do_save_history = TRUE;
-static int do_save_options = TRUE;
+static int do_trace = false;
+static int do_save_history = true;
+static int do_save_options = true;
 static int history_size = DEFAULT_HISTSIZE;  /* max # of lines in history file */
 
 static const struct dbg_option option_list[] = {
@@ -249,7 +254,7 @@ static const struct dbg_option option_list[] = {
 	gettext_noop("set or show the list command window size.") },
 {"outfile", NULL, &output_file, &set_gawk_output,
 	gettext_noop("set or show gawk output file.") },
-{"prompt", NULL, &dgawk_Prompt, &set_prompt,
+{"prompt", NULL, &dgawk_prompt, &set_prompt,
 	gettext_noop("set or show debugger prompt."), },
 {"save_history", &do_save_history, NULL, &set_save_history,
 	gettext_noop("(un)set or show saving of command history (value=on|off).") },
@@ -265,18 +270,18 @@ static void save_options(const char *file);
 
 /* pager */
 jmp_buf pager_quit_tag;
-int pager_quit_tag_valid = FALSE;
+bool pager_quit_tag_valid = false;
 static int screen_width = INT_MAX;	/* no of columns */
 static int screen_height = INT_MAX;	/* no of rows */
 static int pager_lines_printed = 0;	/* no of lines printed so far */ 
 
-static void restart(int run) ATTRIBUTE_NORETURN;
+static void restart(bool run) ATTRIBUTE_NORETURN;
 static void close_all(void);
 static int open_readfd(const char *file);
 static int find_lines(SRCFILE *s);
 static SRCFILE *source_find(char *src);
 static int print_lines(char *src, int start_line, int nlines);
-static void print_symbol(NODE *r, int isparam);
+static void print_symbol(NODE *r, bool isparam);
 static NODE *find_frame(long num);
 static NODE *find_param(const char *name, long num, char **pname);
 static NODE *find_symbol(const char *name, char **pname);
@@ -293,10 +298,9 @@ static void delete_commands_item(struct commands_item *c);
 static NODE *execute_code(volatile INSTRUCTION *code);
 static int pre_execute_code(INSTRUCTION **pi);
 static int parse_condition(int type, int num, char *expr);
-static BREAKPOINT *add_breakpoint(INSTRUCTION *, INSTRUCTION *, char *, int);
+static BREAKPOINT *add_breakpoint(INSTRUCTION *prevp, INSTRUCTION *ip, char *src, bool silent);
 static BREAKPOINT *set_breakpoint_next(INSTRUCTION *rp, INSTRUCTION *ip);
-static BREAKPOINT *set_breakpoint_at(INSTRUCTION *, int, int);
-static int set_breakpoint(CMDARG *arg, int temporary);
+static BREAKPOINT *set_breakpoint_at(INSTRUCTION *rp, int lineno, bool silent);
 static void delete_breakpoint(BREAKPOINT *b);
 static BREAKPOINT *find_breakpoint(long num);
 static void display(struct list_item *d);
@@ -308,12 +312,13 @@ static int watchpoint_triggered(struct list_item *w);
 static void print_instruction(INSTRUCTION *pc, Func_print print_func, FILE *fp, int in_dump);
 static int print_code(INSTRUCTION *pc, void *x);
 static void next_command();
+static void debug_post_execute(INSTRUCTION *pc);
+static int debug_pre_execute(INSTRUCTION **pi);
 static char *g_readline(const char *prompt);
 static int prompt_yes_no(const char *, char , int , FILE *);
-
 static struct pf_data {
 	Func_print print_func;
-	int defn;
+	bool defn;
 	FILE *fp;
 } pf_data;
 
@@ -326,8 +331,8 @@ struct command_source
 	char * (*read_func)(const char *);
 	int (*close_func)(int);
 	int eof_status;		/* see push_cmd_src */
-	int cmd;			/* D_source or 0 */
-	char *str;			/* sourced file */
+	int cmd;		/* D_source or 0 */
+	char *str;		/* sourced file */
 	struct command_source *next;
 };
 
@@ -338,9 +343,9 @@ static struct command_source *cmd_src = NULL;
 	do { \
 		if (! prog_running) { \
 			d_error(_("program not running.")); \
-			return FALSE; \
+			return false; \
 		} \
-	} while (FALSE)
+	} while (false)
 
 
 /* g_readline --  read a line of text; the interface is like 'readline' but
@@ -485,16 +490,16 @@ source_find(char *src)
 			return s;
 	}
 
-	path = find_source(src, &sbuf, &errno_val);
+	path = find_source(src, & sbuf, & errno_val, false);
 	if (path != NULL) {
 		for (s = srcfiles->next; s != srcfiles; s = s->next) {
 			if ((s->stype == SRC_FILE || s->stype == SRC_INC)
-			    && files_are_same(path, s)) {
+			    		&& files_are_same(path, s)) {
 				efree(path);
 				return s;
 			}
-		efree(path);
 		}
+		efree(path);
 	}
 
 	d_error(_("cannot find source file named `%s' (%s)"), src, strerror(errno_val));
@@ -537,6 +542,9 @@ print_lines(char *src, int start_line, int nlines)
 		}
 	}
 
+	/* set binary mode so that byte offset calculations will be right */
+	os_setbinmode(s->fd, O_BINARY);
+
 	if (s->line_offset == NULL && find_lines(s) != 0)
 		return -1;
   	if (start_line < 1 || start_line > s->srclines) {
@@ -574,10 +582,10 @@ print_lines(char *src, int start_line, int nlines)
 		 */
 		if (nlines > 1) {
 			BREAKPOINT *b;
-			int has_bpt = FALSE;		
+			bool has_bpt = false;		
 			for (b = breakpoints.prev; b != &breakpoints; b = b->prev) {
 				if (src == b->src && i == b->bpi->source_line) {
-					has_bpt = TRUE;
+					has_bpt = true;
 					break;
 				}
 			}
@@ -652,7 +660,7 @@ do_list(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 				if (last_printed_line != last_print_count)
 					line_first = 1;
 				else
-					return FALSE;
+					return false;
 			}
 		} else {
 line:
@@ -706,7 +714,7 @@ list:
 		last_printed_line = line_last;
 		last_print_count = line_last - line_first + 1;
 	} 
-	return FALSE;
+	return false;
 }
 
 /* do_info --- info command */
@@ -717,7 +725,7 @@ do_info(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	NODE **table;
 
 	if (arg == NULL || arg->type != D_argument)
-		return FALSE;
+		return false;
 
 	switch (arg->a_argument) {
 	case A_SOURCE:
@@ -746,16 +754,16 @@ do_info(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 			gprintf(out_fp, _("Number  Disp  Enabled  Location\n\n"));
 			for (b = breakpoints.prev; b != &breakpoints; b = b->prev) {
 				char *disp = "keep";
-				if (b->flags & BP_ENABLE_ONCE)
+				if ((b->flags & BP_ENABLE_ONCE) != 0)
 					disp = "dis";
-				else if(b->flags & BP_TEMP)
+				else if ((b->flags & BP_TEMP) != 0)
 					disp = "del";
 				gprintf(out_fp, "%-6d  %-4.4s  %-7.7s  file %s, line #%d\n",
-						b->number, disp, (b->flags & BP_ENABLE) ? "yes" : "no",
+						b->number, disp, (b->flags & BP_ENABLE) != 0 ? "yes" : "no",
 					 	b->src,	b->bpi->source_line);
 				if (b->hit_count > 0)
 					gprintf(out_fp, _("\tno of hits = %ld\n"), b->hit_count);
-				if (b->flags & BP_IGNORE)
+				if ((b->flags & BP_IGNORE) != 0)
 					gprintf(out_fp, _("\tignore next %ld hit(s)\n"), b->ignore_count);
 				if (b->cndn.code != NULL)
 					gprintf(out_fp, _("\tstop condition: %s\n"), b->cndn.expr);
@@ -808,7 +816,7 @@ do_info(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 		if (func == NULL) {
 			/* print ARGV ? */
 			fprintf(out_fp, _("None in main().\n"));
-			return FALSE;
+			return false;
 		}
 
 		pcount = func->param_cnt;              /* # of defined params */
@@ -832,7 +840,7 @@ do_info(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 			if (r->type == Node_array_ref)
 				r = r->orig_array;
 			fprintf(out_fp, "%s = ", func->fparms[i].param);
-			print_symbol(r, TRUE);
+			print_symbol(r, true);
 		}
 		if (to < from)
 			fprintf(out_fp, "%s",
@@ -853,13 +861,13 @@ do_info(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 		break;
 
 	case A_FUNCTIONS:
-		table = function_list(TRUE);
+		table = function_list(true);
 		initialize_pager(out_fp);
 		if (setjmp(pager_quit_tag) == 0) {
 			gprintf(out_fp, _("All defined functions:\n\n"));
 			pf_data.print_func = gprintf;
 			pf_data.fp = out_fp;
-			pf_data.defn = TRUE;
+			pf_data.defn = true;
 			(void) foreach_func(table,
 			            (int (*)(INSTRUCTION *, void *)) print_function,
 			            &pf_data);
@@ -894,7 +902,7 @@ do_info(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 					}
 					gprintf(out_fp, "\n");  
 				} else if (IS_FIELD(d))
-					gprintf(out_fp, "%d:\t$%ld\n", d->number, (long) symbol->numbr);
+					gprintf(out_fp, "%d:\t$%ld\n", d->number, get_number_si(symbol));
 				else
 					gprintf(out_fp, "%d:\t%s\n", d->number, d->sname);
 				if (d->cndn.code != NULL)
@@ -925,13 +933,13 @@ do_info(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 		break;
 	}
 
-	return FALSE;
+	return false;
 }
 
 /* print_symbol --- print a symbol table entry */
 
 static void
-print_symbol(NODE *r, int isparam)
+print_symbol(NODE *r, bool isparam)
 {
 	switch (r->type) {
 	case Node_var_new:
@@ -943,7 +951,7 @@ print_symbol(NODE *r, int isparam)
 		valinfo(r->var_value, fprintf, out_fp);
 		break;
 	case Node_var_array:
-		fprintf(out_fp, "array, %ld elements\n", r->table_size);
+		fprintf(out_fp, "array, %ld elements\n", assoc_length(r));
 		break;
 	case Node_func:
 		fprintf(out_fp, "`function'\n");
@@ -962,7 +970,7 @@ find_frame(long num)
 	if (num == 0)
 		return frame_ptr;
 
-	assert(prog_running == TRUE);
+	assert(prog_running == true);
 	assert(num <= fcall_count);
 	assert(fcall_list[num] != NULL);
 	return fcall_list[num];
@@ -991,7 +999,7 @@ find_param(const char *name, long num, char **pname)
 		pcount = func->param_cnt;
 		for (i = 0; i < pcount; i++) {
 			fparam = func->fparms[i].param; 
-			if (STREQ(name, fparam)) {
+			if (strcmp(name, fparam) == 0) {
 				r = f->stack[i];
 				if (r->type == Node_array_ref)
 					r = r->orig_array;
@@ -1064,12 +1072,12 @@ print_array(volatile NODE *arr, char *arr_name)
 	volatile int ret = 0;
 	volatile jmp_buf pager_quit_tag_stack;
 
-	if (array_empty(arr)) {
+	if (assoc_empty((NODE *) arr)) {
 		gprintf(out_fp, _("array `%s' is empty\n"), arr_name);
 		return 0;
 	}
 
-	num_elems = arr->table_size;
+	num_elems = assoc_length((NODE *) arr);
 
 	/* sort indices, sub_arrays are also sorted! */
 	list = assoc_list((NODE *) arr, "@ind_str_asc", SORTED_IN);
@@ -1115,7 +1123,7 @@ print_subscript(NODE *arr, char *arr_name, CMDARG *a, int count)
 		else {
 			/* print # of elements in array */
 			fprintf(out_fp, "%s = ", r->vname);
-			print_symbol(r, FALSE);	
+			print_symbol(r, false);	
 		}
 	} else {
 		fprintf(out_fp, "%s[\"%s\"] = ", arr_name, subs->stptr);
@@ -1180,7 +1188,7 @@ do_print_var(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 			break;
 
 		case D_field:
-			print_field(a->a_node->numbr);
+			print_field(get_number_si(a->a_node));
 			break;
 
 		default:
@@ -1188,7 +1196,7 @@ do_print_var(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 			break;
 		}
 	}	
-	return FALSE;
+	return false;
 }		
 
 /* do_set_var --- set command */
@@ -1264,7 +1272,9 @@ do_set_var(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 					array = make_array();
 					array->vname = estrdup(subs->stptr, subs->stlen);
 					array->parent_array = r;
-					*assoc_lookup(r, subs) = array;
+					lhs = assoc_lookup(r, subs);
+					unref(*lhs);
+					*lhs = array;
 					r = array;
 				} else if (value->type != Node_var_array) {
 					d_error(_("attempt to use scalar `%s[\"%s\"]' as array"),
@@ -1284,7 +1294,7 @@ do_set_var(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 		long field_num;
 		Func_ptr assign = NULL;
 
-		field_num = (long) arg->a_node->numbr;
+		field_num = get_number_si(arg->a_node);
 		assert(field_num >= 0);
 		arg = arg->next;
 		val = arg->a_node;
@@ -1300,7 +1310,7 @@ do_set_var(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	default:
 		break;
 	}
-	return FALSE;
+	return false;
 }
 
 /* find_item --- find an item in the watch/display list */
@@ -1345,7 +1355,7 @@ delete_item(struct list_item *d)
 		delete_commands_item(c->next);
 	}
 
-	free_context(d->cndn.ctxt, FALSE);	
+	free_context(d->cndn.ctxt, false);
 	if (d->cndn.expr != NULL)
 		efree(d->cndn.expr);
 	
@@ -1534,7 +1544,7 @@ display(struct list_item *d)
 	} else if (IS_FIELD(d)) {
 		NODE *r = d->symbol;
 		fprintf(out_fp, "%d: ", d->number);
-		print_field(r->numbr);
+		print_field(get_number_si(r));
 	} else {
 print_sym:
 		fprintf(out_fp, "%d: %s = ", d->number, d->sname);
@@ -1554,13 +1564,13 @@ do_display(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 		/* display all items */
 		for (d = display_list.prev; d != &display_list; d = d->prev)
 			display(d);
-		return FALSE;
+		return false;
 	}
 
 	if ((d = do_add_item(&display_list, arg)) != NULL)
 		display(d);
 
-	return FALSE;
+	return false;
 }
 
 /* do_undisplay --- undisplay command */
@@ -1569,7 +1579,7 @@ int
 do_undisplay(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 {
 	do_delete_item(&display_list, arg);
-	return FALSE; 
+	return false; 
 }
 
 /* condition_triggered --- test if a condition expression is true */ 
@@ -1582,16 +1592,16 @@ condition_triggered(struct condition *cndn)
 
 	assert(cndn != NULL);
 	if (cndn->code == NULL)
-		return TRUE;
+		return true;
 
 	push_context(cndn->ctxt);
 	r = execute_code((volatile INSTRUCTION *) cndn->code);
 	pop_context();  /* switch to prev context */
 	if (r == NULL)      /* fatal error */
-		return FALSE;   /* not triggered */
+		return false;   /* not triggered */
 
 	force_number(r);
-	di = (r->numbr != 0.0);
+	di = ! iszero(r);
 	DEREF(r);
 	return di;
 }
@@ -1620,7 +1630,7 @@ find_subscript(struct list_item *item, NODE **ptr)
 	return 0;
 }
 
-/* cmp_val --- compare values of watched item, returns TRUE if different; */
+/* cmp_val --- compare values of watched item, returns true if different; */
  
 static int
 cmp_val(struct list_item *w, NODE *old, NODE *new) 
@@ -1628,38 +1638,38 @@ cmp_val(struct list_item *w, NODE *old, NODE *new)
 		/*
 		 *	case    old     new     result
 		 *	------------------------------
-		 *	1:      NULL    ARRAY   TRUE	
-		 *	2:      NULL    SCALAR  TRUE
-		 *	3:      NULL    NULL    FALSE
+		 *	1:      NULL    ARRAY   true	
+		 *	2:      NULL    SCALAR  true
+		 *	3:      NULL    NULL    false
 		 *	4:      SCALAR  SCALAR  cmp_node
-		 *	5:      SCALAR  ARRAY   TRUE
-		 *	6:      SCALAR  NULL    TRUE
-		 *	7:      ARRAY   SCALAR  TRUE
+		 *	5:      SCALAR  ARRAY   true
+		 *	6:      SCALAR  NULL    true
+		 *	7:      ARRAY   SCALAR  true
 		 *	8:      ARRAY   ARRAY   compare size	
-		 *	9:      ARRAY   NULL    TRUE
+		 *	9:      ARRAY   NULL    true
 		 */
 
 	if (WATCHING_ARRAY(w)) {
 		long size = 0;
 		if (! new)		/* 9 */
-			return TRUE;
+			return true;
 		if (new->type == Node_val)	/* 7 */
-			return TRUE;
+			return true;
 		/* new->type == Node_var_array */	/* 8 */
-		size = new->table_size;
+		size = assoc_length(new);
 		if (w->cur_size == size)
-			return FALSE;
-		return TRUE;
+			return false;
+		return true;
 	}
 
 	if (! old && ! new)	/* 3 */
-		return FALSE;
+		return false;
 	if ((! old && new)	/* 1, 2 */
 			|| (old && ! new))	/* 6 */
-		return TRUE;
+		return true;
 
 	if (new->type == Node_var_array)	/* 5 */
-		return TRUE;
+		return true;
 	return cmp_nodes(old, new);			/* 4 */
 }
 
@@ -1685,7 +1695,7 @@ watchpoint_triggered(struct list_item *w)
 		(void) find_subscript(w, &t2);
 	else if (IS_FIELD(w)) {
 		long field_num;
-		field_num = (long) w->symbol->numbr;
+		field_num = get_number_si(w->symbol);
 		t2 = *get_field(field_num, NULL);
 	} else {
 		switch (symbol->type) {
@@ -1720,7 +1730,7 @@ watchpoint_triggered(struct list_item *w)
 			w->flags &= ~CUR_IS_ARRAY;
 			w->cur_value = dupnode(t2);
 		} else
-			w->cur_size = (t2->type == Node_var_array) ? t2->table_size : 0;
+			w->cur_size = (t2->type == Node_var_array) ? assoc_length(t2) : 0;
 	} else if (! t1) { /* 1, 2 */
 		w->old_value = 0;
 		/* new != NULL */
@@ -1728,7 +1738,7 @@ watchpoint_triggered(struct list_item *w)
 			w->cur_value = dupnode(t2);
 		else {
 			w->flags |= CUR_IS_ARRAY;
-			w->cur_size = (t2->type == Node_var_array) ? t2->table_size : 0;
+			w->cur_size = (t2->type == Node_var_array) ? assoc_length(t2) : 0;
 		}
 	} else /* if (t1->type == Node_val) */ {	/* 4, 5, 6 */
 		w->old_value = w->cur_value;
@@ -1736,7 +1746,7 @@ watchpoint_triggered(struct list_item *w)
 			w->cur_value = 0;
 		else if (t2->type == Node_var_array) {
 			w->flags |= CUR_IS_ARRAY;
-			w->cur_size = t2->table_size;
+			w->cur_size = assoc_length(t2);
 		} else
 			w->cur_value = dupnode(t2);
 	}
@@ -1762,13 +1772,13 @@ initialize_watch_item(struct list_item *w)
 			w->cur_value = (NODE *) 0;
 		else if (r->type == Node_var_array) { /* it's a sub-array */
 			w->flags |= CUR_IS_ARRAY;
-			w->cur_size = r->table_size;
+			w->cur_size = assoc_length(r);
 		} else
 			w->cur_value = dupnode(r);
 	} else if (IS_FIELD(w)) {
 		long field_num;
 		t = w->symbol;
-		field_num = (long) t->numbr;
+		field_num = get_number_si(t);
 		r = *get_field(field_num, NULL);
 		w->cur_value = dupnode(r);
 	} else {
@@ -1779,7 +1789,7 @@ initialize_watch_item(struct list_item *w)
 			w->cur_value = dupnode(r);
 		} else if (symbol->type == Node_var_array) {
 			w->flags |= CUR_IS_ARRAY;
-			w->cur_size = symbol->table_size;
+			w->cur_size = assoc_length(symbol);
 		} /* else
 			can't happen */
 	}
@@ -1797,17 +1807,17 @@ do_watch(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 
 	w = do_add_item(&watch_list, arg);
 	if (w == NULL)
-		return FALSE;
+		return false;
 
 	if (initialize_watch_item(w) == -1) {
 		delete_item(w);
-		return FALSE;
+		return false;
 	}
 
 	fprintf(out_fp, "Watchpoint %d: ", w->number);
 	symbol = w->symbol;
 
-/* FIXME: common code also in print_watch_item */
+	/* FIXME: common code also in print_watch_item */
 	if (IS_SUBSCRIPT(w)) {
 		fprintf(out_fp, "%s", w->sname);
 		for (i = 0; i < w->num_subs; i++) {
@@ -1816,11 +1826,11 @@ do_watch(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 		}
 		fprintf(out_fp, "\n");
 	} else if (IS_FIELD(w))
-		fprintf(out_fp, "$%ld\n", (long) symbol->numbr);
+		fprintf(out_fp, "$%ld\n", get_number_si(symbol));
 	else
 		fprintf(out_fp, "%s\n", w->sname);
 
-	return FALSE;
+	return false;
 }
 
 /* do_unwatch --- unwatch command */
@@ -1829,7 +1839,7 @@ int
 do_unwatch(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 {
 	do_delete_item(&watch_list, arg);
-	return FALSE;
+	return false;
 }
 
 /* callback from pop_frame in eval.c */
@@ -1905,7 +1915,7 @@ print_frame(NODE *func, char *src, int srcline)
 	else {
 		pf_data.print_func = fprintf;
 		pf_data.fp = out_fp;
-		pf_data.defn = FALSE;
+		pf_data.defn = false;
 		(void) print_function(func->code_ptr, &pf_data);
 	}
 	fprintf(out_fp, _(" at `%s':%d"), src, srcline);
@@ -1918,7 +1928,7 @@ print_numbered_frame(long num)
 {
 	NODE *f;
 
-	assert(prog_running == TRUE);
+	assert(prog_running == true);
 	f = find_frame(num);
 	if (num == 0) {
 		fprintf(out_fp, "#%ld\t ", num);
@@ -1962,7 +1972,7 @@ do_backtrace(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	}
 	if (cur <= fcall_count)
 		fprintf(out_fp, _("More stack frames follow ...\n"));
-	return FALSE;
+	return false;
 }  	
 
 /* print_cur_frame_and_sourceline --- print current frame, and
@@ -1976,7 +1986,7 @@ print_cur_frame_and_sourceline()
 	int srcline;
 	char *src;
 
-	assert(prog_running == TRUE);
+	assert(prog_running == true);
 	f = find_frame(cur_frame);
 	if (cur_frame == 0) {
 		src = source;
@@ -2005,12 +2015,12 @@ do_frame(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	if (arg && arg->type == D_int) {
 		if (arg->a_int < 0 || arg->a_int > fcall_count) {
 			d_error(_("invalid frame number"));
-			return FALSE;
+			return false;
 		}
 		cur_frame = arg->a_int;
 	}
 	print_cur_frame_and_sourceline();
-	return FALSE;
+	return false;
 }
 
 /* do_up --- up command */
@@ -2028,7 +2038,7 @@ do_up(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	else if (cur_frame > fcall_count)
 		cur_frame = fcall_count;
 	print_cur_frame_and_sourceline();
-	return FALSE;
+	return false;
 }
 
 /* do_down --- down command */
@@ -2046,7 +2056,7 @@ do_down(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	else if (cur_frame > fcall_count)
 		cur_frame = fcall_count;
 	print_cur_frame_and_sourceline();
-	return FALSE;
+	return false;
 }
 
 /* find_rule --- find a rule or function in file 'src' containing
@@ -2058,12 +2068,23 @@ find_rule(char *src, long lineno)
 {
 	INSTRUCTION *rp;
 
-	assert(lineno > 0);
-	for (rp = rule_list->nexti; rp != NULL; rp = rp->nexti) {
-		if ((rp - 1)->source_file == src
-				&& lineno >= (rp + 1)->first_line
-				&& lineno <= (rp + 1)->last_line)
-			return (rp - 1);
+	/*
+	 * FIXME: The check for zero and code that goes with it
+	 * are probably fragile.  A break with no arguments can
+	 * cause this in certain cases. Try to review how this works.
+	 */
+	if (lineno == 0) {
+		for (rp = rule_list->nexti; rp != NULL; rp = rp->nexti) {
+			if ((rp - 1)->source_file == src && (rp - 1)->source_line > 0)
+				return (rp - 1);
+		}
+	} else {
+		for (rp = rule_list->nexti; rp != NULL; rp = rp->nexti) {
+			if ((rp - 1)->source_file == src
+					&& lineno >= (rp + 1)->first_line
+					&& lineno <= (rp + 1)->last_line)
+				return (rp - 1);
+		}
 	}
 	return NULL;
 }
@@ -2082,7 +2103,7 @@ mk_breakpoint(char *src, int srcline)
 	emalloc(b, BREAKPOINT *, sizeof(BREAKPOINT), "mk_breakpoint");
 	memset(&b->cndn, 0, sizeof(struct condition));
 	b->commands.next = b->commands.prev = &b->commands;
-	b->silent = FALSE;
+	b->silent = false;
 
 
 	b->number = ++watch_list.number;	/* breakpoints and watchpoints use same counter */
@@ -2126,7 +2147,7 @@ delete_breakpoint(BREAKPOINT *b)
 		delete_commands_item(c->next);
 	}
 
-	free_context(b->cndn.ctxt, FALSE);	
+	free_context(b->cndn.ctxt, false);	
 	if (b->cndn.expr != NULL)
 		efree(b->cndn.expr);
 
@@ -2156,7 +2177,7 @@ find_breakpoint(long num)
 /* add_breakpoint --- add a breakpoint instruction between PREVP and IP */
  
 static BREAKPOINT *
-add_breakpoint(INSTRUCTION *prevp, INSTRUCTION *ip, char *src, int silent)
+add_breakpoint(INSTRUCTION *prevp, INSTRUCTION *ip, char *src, bool silent)
 {
 	BREAKPOINT *b;
 	INSTRUCTION *bp;
@@ -2173,8 +2194,8 @@ add_breakpoint(INSTRUCTION *prevp, INSTRUCTION *ip, char *src, int silent)
 			 * This is more verbose that it might otherwise be,
 			 * in order to provide easily translatable strings.
 			 */
-			if (b->flags & BP_ENABLE) {
-				if (b->flags & BP_IGNORE)
+			if ((b->flags & BP_ENABLE) != 0) {
+				if ((b->flags & BP_IGNORE) != 0)
 					fprintf(out_fp,
 			_("Note: breakpoint %d (enabled, ignore next %ld hits), also set at %s:%d"),
 						b->number,
@@ -2188,7 +2209,7 @@ add_breakpoint(INSTRUCTION *prevp, INSTRUCTION *ip, char *src, int silent)
 						b->src,
 						lineno);
 			} else {
-				if (b->flags & BP_IGNORE)
+				if ((b->flags & BP_IGNORE) != 0)
 					fprintf(out_fp,
 			_("Note: breakpoint %d (disabled, ignore next %ld hits), also set at %s:%d"),
 						b->number,
@@ -2222,11 +2243,28 @@ add_breakpoint(INSTRUCTION *prevp, INSTRUCTION *ip, char *src, int silent)
 /* set_breakpoint_at --- set a breakpoint at given line number*/
 
 static BREAKPOINT *
-set_breakpoint_at(INSTRUCTION *rp, int lineno, int silent)
+set_breakpoint_at(INSTRUCTION *rp, int lineno, bool silent)
 {
 	INSTRUCTION *ip, *prevp;
 
 	for (prevp = rp, ip = rp->nexti; ip; prevp = ip, ip = ip->nexti) {
+		if (ip->opcode == Op_K_case) {
+			INSTRUCTION *i1, *i2;
+
+			/* Special case: the code line numbers for a switch do not form
+			 * a monotonically increasing sequence. Check if the line # is between
+			 * the first and last statements of the case block before continuing
+			 * the search.
+			 */ 
+			for (i2 = ip->stmt_start, i1 = i2->nexti; i2 != ip->stmt_end;
+								i2 = i1, i1 = i1->nexti) {
+				if (i1->source_line >= lineno)
+					return add_breakpoint(i2, i1, rp->source_file, silent);
+				if (i1 == ip->stmt_end)
+					break;
+			}
+		}
+
 		if (ip->source_line >= lineno)
 			return add_breakpoint(prevp, ip, rp->source_file, silent);
 		if (ip == (rp + 1)->lasti)
@@ -2249,7 +2287,7 @@ set_breakpoint_next(INSTRUCTION *rp, INSTRUCTION *ip)
 		ip = ip->nexti;
 	for (; ip; prevp = ip, ip = ip->nexti) {
 		if (ip->source_line > 0)
-			return add_breakpoint(prevp, ip, rp->source_file, FALSE);
+			return add_breakpoint(prevp, ip, rp->source_file, false);
 		if (ip == (rp + 1)->lasti)
 			break;
 	}
@@ -2259,7 +2297,7 @@ set_breakpoint_next(INSTRUCTION *rp, INSTRUCTION *ip)
 /* set_breakpoint --- set a breakpoint */
 
 static int
-set_breakpoint(CMDARG *arg, int temporary)
+set_breakpoint(CMDARG *arg, bool temporary)
 {
 	int lineno;
 	BREAKPOINT *b = NULL;
@@ -2308,7 +2346,7 @@ set_breakpoint(CMDARG *arg, int temporary)
 			if (temporary)
 				b->flags |= BP_TEMP;
 		}
-		return FALSE;
+		return false;
 	}
 
 	/* arg != NULL */
@@ -2319,7 +2357,7 @@ set_breakpoint(CMDARG *arg, int temporary)
 		arg = arg->next;
 		if (s == NULL || arg == NULL
 				|| (arg->type != D_int && arg->type != D_func))
-			return FALSE;
+			return false;
 		src = s->src;
 		if (arg->type == D_func) /* break filename:function */
 			goto func;
@@ -2333,7 +2371,7 @@ set_breakpoint(CMDARG *arg, int temporary)
 			rp = find_rule(src, lineno);
 			if (rp == NULL)
 				fprintf(out_fp, _("Can't find rule!!!\n"));
-			if (rp == NULL || (b = set_breakpoint_at(rp, lineno, FALSE)) == NULL)
+			if (rp == NULL || (b = set_breakpoint_at(rp, lineno, false)) == NULL)
 				fprintf(out_fp, _("Can't set breakpoint at `%s':%d\n"),
 						src, lineno);
 			if (b != NULL && temporary)
@@ -2345,7 +2383,7 @@ set_breakpoint(CMDARG *arg, int temporary)
 func:
 		func = arg->a_node;
 		rp = func->code_ptr;
-		if ((b = set_breakpoint_at(rp, rp->source_line, FALSE)) == NULL)
+		if ((b = set_breakpoint_at(rp, rp->source_line, false)) == NULL)
 			fprintf(out_fp, _("Can't set breakpoint in function `%s'\n"),
 						func->vname);
 		else if (temporary)
@@ -2354,7 +2392,7 @@ func:
 		break;
 
 	default:
-		return FALSE;
+		return false;
 	}
 	/* condition if any */
 	arg = arg->next;
@@ -2365,7 +2403,7 @@ func:
 			fprintf(out_fp, _("breakpoint %d set at file `%s', line %d is unconditional\n"),
 							b->number, src, lineno);
 	}
-	return FALSE;
+	return false;
 }
 
 
@@ -2386,7 +2424,7 @@ breakpoint_triggered(BREAKPOINT *b)
 		return 0;
 
 	b->hit_count++;
-	if (b->flags & BP_ENABLE_ONCE) {
+	if ((b->flags & BP_ENABLE_ONCE) != 0) {
 		b->flags &= ~BP_ENABLE_ONCE;
 		b->flags &= ~BP_ENABLE;
 	} 
@@ -2398,7 +2436,7 @@ breakpoint_triggered(BREAKPOINT *b)
 int
 do_breakpoint(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 {
-	return set_breakpoint(arg, FALSE);
+	return set_breakpoint(arg, false);
 }	
 
 /* do_tmp_breakpoint --- tbreak command */
@@ -2406,7 +2444,7 @@ do_breakpoint(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 int
 do_tmp_breakpoint(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 {
-	return set_breakpoint(arg, TRUE);
+	return set_breakpoint(arg, true);
 }
 
 /* do_clear --- clear command */
@@ -2420,7 +2458,7 @@ do_clear(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	NODE *func;
 	SRCFILE *s = cur_srcfile;
 	char *src = cur_srcfile->src;
-	int bp_found = FALSE;
+	bool bp_found = false;
 
 	if (arg == NULL) {	/* clear */
 		CHECK_PROG_RUNNING();
@@ -2442,7 +2480,7 @@ do_clear(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 		arg = arg->next;
 		if (s == NULL || arg == NULL ||
 				(arg->type != D_int && arg->type != D_func))
-			return FALSE;
+			return false;
 		src = s->src;
 		if (arg->type == D_func)
 			goto func;
@@ -2452,7 +2490,7 @@ do_clear(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 		lineno = (int) arg->a_int;
 		if (lineno <= 0 || lineno > s->srclines) {
 			d_error(_("line number %d in file `%s' out of range"), lineno, src);
-			return FALSE;
+			return false;
 		}
 		break;
 
@@ -2479,7 +2517,7 @@ func:
 			fprintf(out_fp, "\n");
 		/* fall through */
 	default:
-		return FALSE;
+		return false;
 	}
 
 delete_bp:
@@ -2504,7 +2542,7 @@ delete_bp:
 					src, (int) lineno);
 	else
 		fprintf(out_fp, "\n");
-	return FALSE;
+	return false;
 }
 
 /* enable_breakpoint --- enable a breakpoint and set its disposition */
@@ -2560,7 +2598,7 @@ do_enable_breakpoint(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 				enable_breakpoint(b, disp);
 		}
 	}
-	return FALSE;
+	return false;
 }
 
 /* do_delete_breakpoint --- delete command */
@@ -2569,10 +2607,10 @@ int
 do_delete_breakpoint(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 {
 	if (arg == NULL) {
-		int delete_all = TRUE;
+		bool delete_all = true;
 		delete_all = prompt_yes_no(
 					_("Delete all breakpoints? (y or n) "),
-					_("y")[0], TRUE, out_fp);
+					_("y")[0], true, out_fp);
 		
 		if (delete_all) {
 			while (breakpoints.next != &breakpoints)
@@ -2601,7 +2639,7 @@ do_delete_breakpoint(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 				delete_breakpoint(b);
 		}
 	}
-	return FALSE;
+	return false;
 }
 
 /* do_ignore_breakpoint --- ignore command */
@@ -2613,7 +2651,7 @@ do_ignore_breakpoint(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 
 	if (arg == NULL || arg->type != D_int
 			|| arg->next == NULL || arg->next->type != D_int)
-		return FALSE;
+		return false;
 
 	if ((b = find_breakpoint(arg->a_int)) == NULL)
 		d_error(_("invalid breakpoint number"));
@@ -2629,7 +2667,7 @@ do_ignore_breakpoint(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 					b->number);
 		}
 	}
-	return FALSE;
+	return false;
 }
 
 /* do_disable_breakpoint --- disable command */
@@ -2664,7 +2702,7 @@ do_disable_breakpoint(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 				b->flags &= ~BP_ENABLE;
 		}
 	}
-	return FALSE;
+	return false;
 }
 
 #ifdef HAVE_LIBREADLINE
@@ -2705,17 +2743,26 @@ initialize_readline()
 #endif
 
 
-/* interpret --- debugger entry point */
+/* init_debug --- register debugger exec hooks */
+
+void
+init_debug()
+{
+	register_exec_hook(debug_pre_execute, debug_post_execute);
+}
+
+
+/* debug_prog --- debugger entry point */
 
 int
-interpret(INSTRUCTION *pc)
+debug_prog(INSTRUCTION *pc)
 {
 	char *run;
 
 	input_fd = fileno(stdin);
 	out_fp = stdout;
 	if (os_isatty(input_fd))
-		input_from_tty = TRUE;
+		input_from_tty = true;
 	if (input_fd == 0 && input_from_tty)
 		initialize_readline();
 
@@ -2737,8 +2784,8 @@ interpret(INSTRUCTION *pc)
 		exit(EXIT_FAILURE);
 	}
 
-	dgawk_Prompt = estrdup(DEFAULT_PROMPT, strlen(DEFAULT_PROMPT));
-	dPrompt = dgawk_Prompt;
+	dgawk_prompt = estrdup(DEFAULT_PROMPT, strlen(DEFAULT_PROMPT));
+	dbg_prompt = dgawk_prompt;
 
 	memset(&stop, 0, sizeof(stop));
 	stop.command = D_illegal;
@@ -2754,11 +2801,11 @@ interpret(INSTRUCTION *pc)
 		unserialize(OPTION);
 		unsetenv("DGAWK_RESTART");
 		fprintf(out_fp, "Restarting ...\n");	
-		if (run[0] == 'T') 
+		if (strcasecmp(run, "true") == 0)
 			(void) do_run(NULL, 0);
 
 	} else if (command_file != NULL) {
-		/* run commands from a file (--command=file  or -R file) */
+		/* run commands from a file (--debug=file  or -D file) */
 		int fd;
 		fd = open_readfd(command_file);
 		if (fd == INVALID_HANDLE) {
@@ -2766,7 +2813,7 @@ interpret(INSTRUCTION *pc)
 						command_file, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
-		push_cmd_src(fd, FALSE, g_readline, close, 0, EXIT_FAILURE);
+		push_cmd_src(fd, false, g_readline, close, 0, EXIT_FAILURE);
 		cmd_src->str = estrdup(command_file, strlen(command_file));
 
 	} else {
@@ -2780,7 +2827,7 @@ interpret(INSTRUCTION *pc)
 		/* read saved options */
 		fd = open_readfd(options_file);
 		if (fd > INVALID_HANDLE)
-			push_cmd_src(fd, FALSE, g_readline, close, 0, EXIT_SUCCESS);
+			push_cmd_src(fd, false, g_readline, close, 0, EXIT_SUCCESS);
 	}
 
 	/* start the command interpreter */
@@ -2799,16 +2846,16 @@ check_watchpoint()
 	struct list_item *w;
 
 	if (stop.command == D_return)
-		return FALSE;
+		return false;
 	for (w = watch_list.prev; w != &watch_list; w = w->prev) {
 		int wnum = watchpoint_triggered(w);
 		if (wnum > 0) {
 			stop.watch_point = wnum;
-			stop.print_frame = TRUE;
-			return TRUE;
+			stop.print_frame = true;
+			return true;
 		}
 	}
-	return FALSE;
+	return false;
 }
 
 /* check_breakpoint --- check if breakpoint triggered */
@@ -2820,7 +2867,7 @@ check_breakpoint(INSTRUCTION **pi)
 
 	pc = *pi;
 	if (stop.command == D_return)
-		return FALSE; 
+		return false; 
 	if (pc->opcode == Op_breakpoint) {
 		int bnum;
 		*pi = pc->nexti;    /* skip past the breakpoint instruction;
@@ -2829,17 +2876,17 @@ check_breakpoint(INSTRUCTION **pi)
 		bnum = breakpoint_triggered(pc->break_pt);
 		if (bnum > 0) {
 			stop.break_point = bnum;
-			stop.print_frame = TRUE;
-			return TRUE;
+			stop.print_frame = true;
+			return true;
 		}
 	}
-	return FALSE;
+	return false;
 }
 
 /* restart --- restart the debugger */
 
 static void
-restart(int run)
+restart(bool run)
 {
 	/* save state in the environment after serialization */
 	serialize(BREAK);
@@ -2849,7 +2896,7 @@ restart(int run)
 	serialize(OPTION);
 
 	/* tell the new process to restore state from the environment */
-	setenv("DGAWK_RESTART", (run ? "TRUE" : "FALSE"), 1);
+	setenv("DGAWK_RESTART", (run ? "true" : "false"), 1);
 
 	/* close all open files */
 	close_all();
@@ -2869,15 +2916,15 @@ do_run(CMDARG *arg ATTRIBUTE_UNUSED, int cmd ATTRIBUTE_UNUSED)
 {
 	if (prog_running) {
 		if (! input_from_tty)
-			need_restart = TRUE;	/* handled later */
+			need_restart = true;	/* handled later */
 		else {
 			need_restart = prompt_yes_no(
 			         _("Program already running. Restart from beginning (y/n)? "),
-			         _("y")[0], FALSE, out_fp);
+			         _("y")[0], false, out_fp);
 
 			if (! need_restart) {
 				fprintf(out_fp, _("Program not restarted\n"));
-				return FALSE;
+				return false;
 			}
 		}
 	}
@@ -2885,36 +2932,36 @@ do_run(CMDARG *arg ATTRIBUTE_UNUSED, int cmd ATTRIBUTE_UNUSED)
 	if (need_restart) {
 		/* avoid endless cycles of restarting */
 		if (command_file != NULL) {
-			/* input_from_tty = FALSE */
+			/* input_from_tty = false */
 			fprintf(stderr, _("error: cannot restart, operation not allowed\n"));
 			exit(EXIT_FAILURE);
 		}
 
 		if (cmd_src->cmd == D_source) {
-			/* input_from_tty = FALSE */
+			/* input_from_tty = false */
 			fprintf(out_fp, _("error (%s): cannot restart, ignoring rest of the commands\n"), cmd_src->str);
 			pop_cmd_src();
-			return FALSE;
+			return false;
 		}
 
-		restart(TRUE);	/* does not return */
+		restart(true);	/* does not return */
 	}
 
 	fprintf(out_fp, _("Starting program: \n"));
 
-	prog_running = TRUE;
-	fatal_tag_valid = TRUE;
+	prog_running = true;
+	fatal_tag_valid = true;
 	if (setjmp(fatal_tag) == 0)
-		(void) r_interpret(code_block);
+		(void) interpret(code_block);
 
-	fatal_tag_valid = FALSE;
-	prog_running = FALSE;
+	fatal_tag_valid = false;
+	prog_running = false;
 	fprintf(out_fp, _("Program exited %s with exit value: %d\n"),
 			(! exiting && exit_val != EXIT_SUCCESS) ? "abnormally"
 			                                        : "normally",
 			exit_val);
-	need_restart = TRUE;
-	return FALSE;
+	need_restart = true;
+	return false;
 }
 
 /* do_quit --- quit command */
@@ -2922,14 +2969,14 @@ do_run(CMDARG *arg ATTRIBUTE_UNUSED, int cmd ATTRIBUTE_UNUSED)
 int
 do_quit(CMDARG *arg ATTRIBUTE_UNUSED, int cmd ATTRIBUTE_UNUSED)
 {
-	int terminate = TRUE;
+	bool terminate = true;
 	if (prog_running)
 		terminate = prompt_yes_no(
 		            _("The program is running. Exit anyway (y/n)? "),
-		            _("y")[0], TRUE, out_fp);
+		            _("y")[0], true, out_fp);
 	if (terminate) {
 		close_all();
-		do_trace = FALSE; 	/* don't save 'trace on' */
+		do_trace = false; 	/* don't save 'trace on' */
 
 #ifdef HAVE_LIBREADLINE
 		if (do_save_history && input_from_tty) {
@@ -2944,7 +2991,7 @@ do_quit(CMDARG *arg ATTRIBUTE_UNUSED, int cmd ATTRIBUTE_UNUSED)
 
 		exit(exit_val);
 	}
-	return FALSE;
+	return false;
 }
 
 /* do_continue --- continue command */
@@ -2956,23 +3003,23 @@ do_continue(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 
 	CHECK_PROG_RUNNING();
 	if (! arg || arg->type != D_int)
-		return TRUE;
+		return true;
 
 	/* arg is breakpoint ignore count if stopped at a breakpoint */
 	if (! stop.break_point) {
 		fprintf(out_fp, _("Not stopped at any breakpoint; argument ignored.\n"));
-		return TRUE;
+		return true;
 	}
 	b = find_breakpoint(stop.break_point);
 	if (b == NULL) {
 		d_error(_("invalid breakpoint number %d."), stop.break_point);
-		return FALSE;
+		return false;
 	}
 	b->flags |= BP_IGNORE;
 	b->ignore_count = arg->a_int;
 	fprintf(out_fp, _("Will ignore next %ld crossings of breakpoint %d.\n"),
 				b->ignore_count, stop.break_point);
-	return TRUE;
+	return true;
 }
 
 /* next_step --- common code for next and step commands */
@@ -2986,10 +3033,10 @@ next_step(CMDARG *arg, int cmd)
 	else
 		stop.repeat_count = 1;
 	stop.command = cmd;
-	return TRUE;
+	return true;
 }
 
-/* check_step --- process step command, return TRUE if stopping */
+/* check_step --- process step command, return true if stopping */
 
 static int
 check_step(INSTRUCTION **pi)
@@ -2998,7 +3045,7 @@ check_step(INSTRUCTION **pi)
 		stop.fcall_count = fcall_count;
 		stop.sourceline = sourceline;
 		stop.source = source;
-		stop.print_frame = TRUE;
+		stop.print_frame = true;
 		return (--stop.repeat_count == 0);
 	}
 
@@ -3012,10 +3059,10 @@ check_step(INSTRUCTION **pi)
 		stop.sourceline = sourceline;
 		return (--stop.repeat_count == 0);
 	}
-	return FALSE;
+	return false;
 }
 
-/* do_step -- process step command, return TRUE if stopping */
+/* do_step -- process step command, return true if stopping */
 
 int
 do_step(CMDARG *arg, int cmd)
@@ -3031,7 +3078,7 @@ do_step(CMDARG *arg, int cmd)
 	return ret;
 }
 
-/* do_stepi -- process stepi command, return TRUE if stopping */
+/* do_stepi -- process stepi command, return true if stopping */
 
 static int
 check_stepi(INSTRUCTION **pi)
@@ -3052,7 +3099,7 @@ do_stepi(CMDARG *arg, int cmd)
 }
 
 
-/* check_next -- process next command returning TRUE if stopping */
+/* check_next -- process next command returning true if stopping */
 
 static int
 check_next(INSTRUCTION **pi)
@@ -3063,7 +3110,7 @@ check_next(INSTRUCTION **pi)
 		stop.fcall_count = fcall_count;
 		stop.sourceline = sourceline;
 		stop.source = source;
-		stop.print_frame = TRUE;
+		stop.print_frame = true;
 		return (--stop.repeat_count == 0);
 	}
 
@@ -3087,7 +3134,7 @@ check_next(INSTRUCTION **pi)
 	}
 #endif
 
-	return FALSE;
+	return false;
 }
 
 /* do_next -- next command */
@@ -3107,7 +3154,7 @@ do_next(CMDARG *arg, int cmd)
 	return ret;
 }
 
-/* check_nexti --- process nexti command, returns TRUE if stopping */
+/* check_nexti --- process nexti command, returns true if stopping */
 
 static int
 check_nexti(INSTRUCTION **pi)
@@ -3115,7 +3162,7 @@ check_nexti(INSTRUCTION **pi)
 	/* make sure not to step inside function calls */
 
 	if (fcall_count < stop.fcall_count) {
-		stop.print_frame = TRUE;
+		stop.print_frame = true;
 		stop.fcall_count = fcall_count;
 	}
 	return (fcall_count == stop.fcall_count
@@ -3137,16 +3184,16 @@ do_nexti(CMDARG *arg, int cmd)
 	return ret;
 }
 
-/* check_finish --- process finish command, returns TRUE if stopping */
+/* check_finish --- process finish command, returns true if stopping */
 
 static int
 check_finish(INSTRUCTION **pi)
 {
 	if (fcall_count == stop.fcall_count) {
-		stop.print_frame = TRUE;
-		return TRUE;
+		stop.print_frame = true;
+		return true;
 	}
-	return FALSE;
+	return false;
 }
 
 /* do_finish --- finish command */
@@ -3158,7 +3205,7 @@ do_finish(CMDARG *arg ATTRIBUTE_UNUSED, int cmd)
 	if (cur_frame == fcall_count) {
 		fprintf(out_fp,
 			_("'finish' not meaningful in the outermost frame main()\n"));
-		return FALSE;
+		return false;
 	}
 	stop.fcall_count = fcall_count - cur_frame - 1;
 	assert(stop.fcall_count >= 0);
@@ -3166,11 +3213,11 @@ do_finish(CMDARG *arg ATTRIBUTE_UNUSED, int cmd)
 	print_numbered_frame(cur_frame);
 	stop.check_func = check_finish;
 	stop.command = cmd;
-	stop.print_ret = TRUE;
-	return TRUE;
+	stop.print_ret = true;
+	return true;
 }
 
-/* check_return --- process return, returns TRUE if stopping */
+/* check_return --- process return, returns true if stopping */
 
 static int
 check_return(INSTRUCTION **pi)
@@ -3178,8 +3225,8 @@ check_return(INSTRUCTION **pi)
 	assert(fcall_count >= stop.fcall_count);
 
 	if (fcall_count == stop.fcall_count) {
-		stop.print_frame = TRUE;
-		return TRUE;
+		stop.print_frame = true;
+		return true;
 	}
 
 	if (fcall_count > stop.fcall_count) {	/* innermost frame just returned */
@@ -3192,7 +3239,7 @@ check_return(INSTRUCTION **pi)
 		/* assert((*pi)->opcode == Op_K_return); */
 	}
 
-	return FALSE;
+	return false;
 }
 
 /* do_return --- return command */
@@ -3206,7 +3253,7 @@ do_return(CMDARG *arg, int cmd)
 	func = find_frame(cur_frame)->func_node;
 	if (func == NULL) {
 		fprintf(out_fp, _("'return' not meaningful in the outermost frame main()\n"));
-		return FALSE;
+		return false;
 	}
 
 	stop.fcall_count = fcall_count - cur_frame - 1;
@@ -3223,26 +3270,26 @@ do_return(CMDARG *arg, int cmd)
 		n = dupnode(Nnull_string);
 	PUSH(n);
 
-	return TRUE;
+	return true;
 }
 
-/* check_until --- process until, returns TRUE if stopping */
+/* check_until --- process until, returns true if stopping */
 
 int
 check_until(INSTRUCTION **pi)
 {
 	if (fcall_count < stop.fcall_count) { /* current stack frame returned */
-		stop.print_frame = TRUE;
-		return TRUE;
+		stop.print_frame = true;
+		return true;
 	} else if (fcall_count == stop.fcall_count) {
 		if (stop.pc && *pi == stop.pc)		/* until location */
-			return TRUE;
+			return true;
 		if (stop.sourceline > 0		/* until */
 				&& source == stop.source
 				&& sourceline > stop.sourceline)
-			return TRUE;
+			return true;
 	}
-	return FALSE;
+	return false;
 }
 
 /* do_until --- until command */
@@ -3277,7 +3324,7 @@ do_until(CMDARG *arg, int cmd)
 		stop.fcall_count = fcall_count - cur_frame;
 		stop.check_func = check_until;
 		stop.command = cmd;
-		return TRUE;
+		return true;
 	}
 
     /* GDB: until location - continue running program until
@@ -3291,7 +3338,7 @@ do_until(CMDARG *arg, int cmd)
 		arg = arg->next;
 		if (s == NULL || arg == NULL
 				|| (arg->type != D_int && arg->type != D_func))
-			return FALSE;
+			return false;
 		src = s->src;
 		if (arg->type == D_func)
 			goto func;
@@ -3302,7 +3349,7 @@ do_until(CMDARG *arg, int cmd)
 		if (lineno <= 0 || lineno > s->srclines) {
 			d_error(_("line number %d in file `%s' out of range"),
 						lineno, src);
-			return FALSE;
+			return false;
 		}
 		break;
 
@@ -3316,19 +3363,19 @@ func:
 				stop.fcall_count = fcall_count - cur_frame;
 				stop.check_func = check_until;
 				stop.command = cmd;
-				return TRUE;
+				return true;
 			}
 		}
 		fprintf(out_fp, _("Can't find specified location in function `%s'\n"),
 				func->vname);
 		/* fall through */
 	default:
-		return FALSE;
+		return false;
 	}
 
 	if ((rp = find_rule(src, lineno)) == NULL) {
 		d_error(_("invalid source line %d in file `%s'"), lineno, src);
-		return FALSE;
+		return false;
 	}
 
 	for (ip = rp->nexti; ip; ip = ip->nexti) {
@@ -3337,14 +3384,14 @@ func:
 			stop.fcall_count = fcall_count - cur_frame;
 			stop.check_func = check_until;
 			stop.command = cmd;
-			return TRUE;
+			return true;
 		}
 		if (ip == (rp + 1)->lasti)
 			break;
 	}
 	fprintf(out_fp, _("Can't find specified location %d in file `%s'\n"),
 				lineno, src);
-	return FALSE;
+	return false;
 }
 
 /* print_watch_item --- print watched item name, old and current values */
@@ -3364,7 +3411,7 @@ print_watch_item(struct list_item *w)
 		}
 		fprintf(out_fp, "\n");  
 	} else if (IS_FIELD(w))
-		fprintf(out_fp, "$%ld\n", (long) symbol->numbr);
+		fprintf(out_fp, "$%ld\n", get_number_si(symbol));
 	else
 		fprintf(out_fp, "%s\n", w->sname);
 
@@ -3379,9 +3426,9 @@ else                                                                \
 	valinfo(w->V, fprintf, out_fp);
 
 	fprintf(out_fp, "  Old value: ");
-	print_value((w->flags & OLD_IS_ARRAY), old_size, old_value);
+	print_value((w->flags & OLD_IS_ARRAY) != 0, old_size, old_value);
 	fprintf(out_fp, "  New value: ");
-	print_value((w->flags & CUR_IS_ARRAY), cur_size, cur_value);
+	print_value((w->flags & CUR_IS_ARRAY) != 0, cur_size, cur_value);
 
 #undef print_value
 }
@@ -3431,7 +3478,7 @@ next_command()
 	if (stop.print_frame) {
 		print_frame(frame_ptr->func_node, source, sourceline);
 		fprintf(out_fp, "\n");
-		stop.print_frame = FALSE;
+		stop.print_frame = false;
 	} 
 
 	(void) print_lines(source, sourceline, 1);
@@ -3475,10 +3522,10 @@ no_output:
 	read_command();		/* zzparse */
 }
 
-/* post_execute --- post_hook in the interpreter */ 
+/* debug_post_execute --- post_hook in the interpreter */ 
 
-void
-post_execute(INSTRUCTION *pc)
+static void
+debug_post_execute(INSTRUCTION *pc)
 {
 	if (! in_main_context())
 		return;
@@ -3489,15 +3536,15 @@ post_execute(INSTRUCTION *pc)
 	case Op_K_exit:
 		if (stop.command == D_finish) {
 			/* cancel finish command */
-			stop.print_ret = FALSE;
-			stop.print_frame = FALSE;
+			stop.print_ret = false;
+			stop.print_frame = false;
 			stop.command = D_illegal;
 			stop.check_func = NULL;
 			fprintf(out_fp, _("'finish' not meaningful with non-local jump '%s'\n"),
 							op2str(pc->opcode)); 
 		} else if (stop.command == D_until) {
 			/* cancel until command */
-			stop.print_frame = FALSE;
+			stop.print_frame = false;
 			stop.command = D_illegal;
 			stop.check_func = NULL;
 			fprintf(out_fp, _("'until' not meaningful with non-local jump '%s'\n"),
@@ -3515,7 +3562,7 @@ post_execute(INSTRUCTION *pc)
 			r = TOP();
 			fprintf(out_fp, "Returned value = ");
 			valinfo(r, fprintf, out_fp);
-			stop.print_ret = FALSE;
+			stop.print_ret = false;
 		}
 		break;
 
@@ -3528,15 +3575,15 @@ post_execute(INSTRUCTION *pc)
 	}
 }
 
-/* pre_execute --- pre_hook, called by the interpreter before execution; 
+/* debug_pre_execute --- pre_hook, called by the interpreter before execution; 
  *                 checks if execution needs to be suspended and control
  *                 transferred to the debugger.
  */
 
-int
-pre_execute(INSTRUCTION **pi)
+static int
+debug_pre_execute(INSTRUCTION **pi)
 {
-	static int cant_stop = FALSE;
+	static bool cant_stop = false;
 	NODE *m;
 
 	if (! in_main_context())
@@ -3551,7 +3598,7 @@ pre_execute(INSTRUCTION **pi)
 		&& cur_pc->opcode != Op_breakpoint
 		&& stop.command != D_return
 	)
-		print_instruction(cur_pc, fprintf, out_fp, FALSE);
+		print_instruction(cur_pc, fprintf, out_fp, false);
 
 /* N.B.: For Op_field_spec_lhs must execute instructions upto Op_field_assign
  * as a group before stopping. Otherwise, watch/print of field variables
@@ -3561,48 +3608,48 @@ pre_execute(INSTRUCTION **pi)
  
 	switch (cur_pc->opcode) {
 	case Op_field_spec_lhs:
-		cant_stop = TRUE;
+		cant_stop = true;
 		break;
 
 	case Op_field_assign:
-		cant_stop = FALSE;
-		return TRUE; /* may stop at next instruction */ 
+		cant_stop = false;
+		return true; /* may stop at next instruction */ 
 
 	case Op_push_lhs:
 		m = cur_pc->memory;
 		if (m->type == Node_var && m->var_assign)
-			cant_stop = TRUE;
+			cant_stop = true;
 		break;
 
 	case Op_arrayfor_incr:	/* can have special var as array variable !!! */
 		m = cur_pc->array_var;
 		if (m->type == Node_var && m->var_assign)
-			cant_stop = TRUE;
+			cant_stop = true;
 		break;
 
 	case Op_var_assign:
-		cant_stop = FALSE;
-		return TRUE; /* may stop at next instruction */
+		cant_stop = false;
+		return true; /* may stop at next instruction */
 
 	case Op_rule:
 		cur_rule = cur_pc->in_rule;
-		return TRUE;
+		return true;
 
 	case Op_func:
 	case Op_var_update:
-		return TRUE;
+		return true;
 
 	case Op_breakpoint:
 		break;	/* processed later in check_breakpoint() */
 
 	default:
 		if (cur_pc->source_line <= 0) 
-			return TRUE;
+			return true;
 		break;
 	}
 
 	if (cant_stop)
-		return TRUE;
+		return true;
 
 	assert(sourceline > 0);
 
@@ -3626,42 +3673,56 @@ static void
 print_memory(NODE *m, NODE *func, Func_print print_func, FILE *fp)
 {
 	switch (m->type) {
-		case Node_val:
-			if (m == Nnull_string)
-				print_func(fp, "Nnull_string");
-			else if ((m->flags & NUMBER) != 0)
-				print_func(fp, "%g", m->numbr);
-			else if ((m->flags & STRING) != 0)
-				pp_string_fp(print_func, fp, m->stptr, m->stlen, '"', FALSE);
-			else if ((m->flags & NUMCUR) != 0)
-				print_func(fp, "%g", m->numbr);
-			else if ((m->flags & STRCUR) != 0)
-				pp_string_fp(print_func, fp, m->stptr, m->stlen, '"', FALSE);
+	case Node_val:
+		if (m == Nnull_string)
+			print_func(fp, "Nnull_string");
+		else if ((m->flags & NUMBER) != 0) {
+#ifdef HAVE_MPFR
+			if ((m->flags & MPFN) != 0)
+				print_func(fp, "%s", mpg_fmt("%R*g", ROUND_MODE, m->mpg_numbr));
+			else if ((m->flags & MPZN) != 0)
+				print_func(fp, "%s", mpg_fmt("%Zd", m->mpg_i));
 			else
-				print_func(fp, "-?-");
-			print_func(fp, " [%s]", flags2str(m->flags));
-			break;
+#endif
+				print_func(fp, "%g", m->numbr);
+		} else if ((m->flags & STRING) != 0)
+			pp_string_fp(print_func, fp, m->stptr, m->stlen, '"', false);
+		else if ((m->flags & NUMCUR) != 0) {
+#ifdef HAVE_MPFR
+			if ((m->flags & MPFN) != 0)
+				print_func(fp, "%s", mpg_fmt("%R*g", ROUND_MODE, m->mpg_numbr));
+			else if ((m->flags & MPZN) != 0)
+				print_func(fp, "%s", mpg_fmt("%Zd", m->mpg_i));
+			else
+#endif
+				print_func(fp, "%g", m->numbr);
+		} else if ((m->flags & STRCUR) != 0)
+			pp_string_fp(print_func, fp, m->stptr, m->stlen, '"', false);
+		else
+			print_func(fp, "-?-");
+		print_func(fp, " [%s]", flags2str(m->flags));
+		break;
 
-		case Node_regex:
-			pp_string_fp(print_func, fp, m->re_exp->stptr, m->re_exp->stlen, '/', FALSE);
-			break;
+	case Node_regex:
+		pp_string_fp(print_func, fp, m->re_exp->stptr, m->re_exp->stlen, '/', false);
+		break;
 
-		case Node_dynregex:
-			break;
-			
-		case Node_param_list:
-			assert(func != NULL);
-			print_func(fp, "%s", func->fparms[m->param_cnt].param);
-			break;
+	case Node_dynregex:
+		break;
+		
+	case Node_param_list:
+		assert(func != NULL);
+		print_func(fp, "%s", func->fparms[m->param_cnt].param);
+		break;
 
-		case Node_var:
-		case Node_var_new:
-		case Node_var_array:
-			print_func(fp, "%s", m->vname);
-			break;
+	case Node_var:
+	case Node_var_new:
+	case Node_var_array:
+		print_func(fp, "%s", m->vname);
+		break;
 
-		default:
-			print_func(fp, "?");  /* can't happen */
+	default:
+		print_func(fp, "?");  /* can't happen */
 	}
 }
 
@@ -3677,7 +3738,8 @@ print_instruction(INSTRUCTION *pc, Func_print print_func, FILE *fp, int in_dump)
 	if (noffset == 0) {
 		static char buf[50];
 		/* offset for 2nd to last lines in a multi-line output */
-		noffset = sprintf(buf, "[      :%p] %-20.20s: ", pc, opcode2str(pc->opcode));
+		noffset = sprintf(buf, "[      :%p] %-20.20s: ", (void *) pc,
+				opcode2str(pc->opcode));
 	}
 
 	if (pc->opcode == Op_func) {
@@ -3732,7 +3794,7 @@ print_instruction(INSTRUCTION *pc, Func_print print_func, FILE *fp, int in_dump)
 
 	case Op_field_spec_lhs:
 		print_func(fp, "[target_assign = %p] [do_reference = %s]\n",
-				pc->target_assign, pc->do_reference ? "TRUE" : "FALSE");
+				pc->target_assign, pc->do_reference ? "true" : "false");
 		break;
 
 	case Op_func:
@@ -3742,12 +3804,12 @@ print_instruction(INSTRUCTION *pc, Func_print print_func, FILE *fp, int in_dump)
 
 	case Op_K_getline_redir:
 		print_func(fp, "[into_var = %s] [redir_type = \"%s\"]\n",
-		                pc->into_var ? "TRUE" : "FALSE",
+		                pc->into_var ? "true" : "false",
 		                redir2str(pc->redir_type));
 		break;
 
 	case Op_K_getline:
-		print_func(fp, "[into_var = %s]\n", pc->into_var ? "TRUE" : "FALSE");
+		print_func(fp, "[into_var = %s]\n", pc->into_var ? "true" : "false");
 		print_func(fp, "%*s[target_beginfile = %p] [target_endfile = %p]\n",
 		                noffset, "",
 		                (pc + 1)->target_beginfile, (pc + 1)->target_endfile);
@@ -3803,7 +3865,7 @@ print_instruction(INSTRUCTION *pc, Func_print print_func, FILE *fp, int in_dump)
 
 	case Op_K_case:
 		print_func(fp, "[target_jmp = %p] [match_exp = %s]\n",
-						pc->target_jmp,	(pc + 1)->match_exp ? "TRUE" : "FALSE");
+						pc->target_jmp,	(pc + 1)->match_exp ? "true" : "false");
 		break;
 
 	case Op_arrayfor_incr:
@@ -3833,9 +3895,9 @@ print_instruction(INSTRUCTION *pc, Func_print print_func, FILE *fp, int in_dump)
 			{ 0, NULL }
 		};
 
-		if (pc->sub_flags & GSUB)
+		if ((pc->sub_flags & GSUB) != 0)
 			fname = "gsub";
-		else if (pc->sub_flags & GENSUB)
+		else if ((pc->sub_flags & GENSUB) != 0)
 			fname = "gensub";
 		print_func(fp, "%s [arg_count = %ld] [sub_flags = %s]\n",
 				fname, pc->expr_count,
@@ -3866,7 +3928,7 @@ print_instruction(INSTRUCTION *pc, Func_print print_func, FILE *fp, int in_dump)
 	case Op_subscript_lhs:
 		print_func(fp, "[sub_count = %ld] [do_reference = %s]\n",
 		                pc->sub_count,
-		                pc->do_reference ? "TRUE" : "FALSE");
+		                pc->do_reference ? "true" : "false");
 		break;
 
 	case Op_K_delete:
@@ -3878,7 +3940,7 @@ print_instruction(INSTRUCTION *pc, Func_print print_func, FILE *fp, int in_dump)
 		/* NB: concat_flag CSVAR only used in grammar, don't display it */ 
 		print_func(fp, "[expr_count = %ld] [concat_flag = %s]\n",
 						pc->expr_count,
-						(pc->concat_flag & CSUBSEP) ? "CSUBSEP" : "0");
+						(pc->concat_flag & CSUBSEP) != 0 ? "CSUBSEP" : "0");
 		break;
 
 	case Op_rule:
@@ -3914,7 +3976,7 @@ print_instruction(INSTRUCTION *pc, Func_print print_func, FILE *fp, int in_dump)
 	case Op_push_lhs:
 		print_memory(pc->memory, func, print_func, fp);
 		print_func(fp, " [do_reference = %s]\n",
-		                pc->do_reference ? "TRUE" : "FALSE");
+		                pc->do_reference ? "true" : "false");
 		break;
 				
 	case Op_push_i:
@@ -3933,6 +3995,7 @@ print_instruction(INSTRUCTION *pc, Func_print print_func, FILE *fp, int in_dump)
 	case Op_quotient_i:
 	case Op_mod_i:
 	case Op_assign_concat:
+	case Op_comment:
 		print_memory(pc->memory, func, print_func, fp);
 		/* fall through */
 	default:
@@ -3948,10 +4011,10 @@ do_trace_instruction(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 {
 	if (arg != NULL && arg->type == D_argument
 			&& arg->a_argument == A_TRACE_ON)
-		do_trace = TRUE;
+		do_trace = true;
 	else
-		do_trace = FALSE;
-	return FALSE;
+		do_trace = false;
+	return false;
 } 
 
 /* print_code --- print a list of instructions */
@@ -3978,34 +4041,34 @@ do_dump_instructions(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 		if ((fp = fopen(arg->a_string, "w")) == NULL) {
 			d_error(_("could not open `%s' for writing (%s)"),
 					arg->a_string, strerror(errno));
-			return FALSE;
+			return false;
 		}
 		pf_data.print_func = fprintf;
 		pf_data.fp = fp;
-		pf_data.defn = TRUE;	/* in_dump = TRUE */
+		pf_data.defn = true;	/* in_dump = true */
 		(void) print_code(code_block, &pf_data);
-		funcs = function_list(TRUE);
+		funcs = function_list(true);
 		(void) foreach_func(funcs,
 		                     (int (*)(INSTRUCTION *, void *)) print_code,
 		                     &pf_data);
 		efree(funcs);
 		fclose(fp);
-		return FALSE;
+		return false;
 	}
 
-	funcs = function_list(TRUE);
+	funcs = function_list(true);
 	initialize_pager(out_fp);
 	if (setjmp(pager_quit_tag) == 0) {
 		pf_data.print_func = gprintf;
 		pf_data.fp = out_fp;
-		pf_data.defn = TRUE;	/* in_dump = TRUE */
+		pf_data.defn = true;	/* in_dump = true */
 		(void) print_code(code_block, &pf_data);
 		(void) foreach_func(funcs,
 		                    (int (*)(INSTRUCTION *, void *)) print_code,
 		                     &pf_data);
 	}
 	efree(funcs);
-	return FALSE;
+	return false;
 }
 
 /* do_save --- save command */
@@ -4013,7 +4076,7 @@ do_dump_instructions(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 int
 do_save(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 {
-#ifdef HAVE_LIBREADLINE
+#if defined(HAVE_LIBREADLINE) && defined(HAVE_HISTORY_LIST)
 	FILE *fp;
 	HIST_ENTRY **hist_list;
 	int i;
@@ -4021,7 +4084,7 @@ do_save(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	if ((fp = fopen(arg->a_string, "w")) == NULL) {
 		d_error(_("could not open `%s' for writing (%s)"),
 				arg->a_string, strerror(errno));
-		return FALSE;
+		return false;
 	}
 
 	hist_list = history_list();
@@ -4036,7 +4099,7 @@ do_save(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 			 */
 
 			if (strlen(line) > 1
-					&& STREQN(line, "sa", 2))	
+			    && strncmp(line, "sa", 2) == 0)	
 				continue;
 
 			fprintf(fp, "%s\n", line);
@@ -4044,7 +4107,7 @@ do_save(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	}
 	fclose(fp);
 #endif
-	return FALSE;
+	return false;
 }
 
 /* do_option --- option command */
@@ -4062,7 +4125,7 @@ do_option(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 			else
 				fprintf(out_fp, "%s = %d\n", opt->name, *(opt->num_val));
 		}
-		return FALSE;
+		return false;
 	}
 
 	name = arg->a_string;
@@ -4070,11 +4133,11 @@ do_option(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	value = arg ? arg->a_string : NULL;
 
 	for (opt = option_list; opt->name; opt++) {	/* linear search */
-		if (STREQ(name, opt->name))
+		if (strcmp(name, opt->name) == 0)
 			break;
 	}
 	if (! opt->name)
-		return FALSE;
+		return false;
 
 	if (value == NULL) {	/* display current setting */
 		if (opt->str_val != NULL)
@@ -4083,7 +4146,7 @@ do_option(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 			fprintf(out_fp, "%s = %d\n", opt->name, *(opt->num_val));
 	} else
 		(*(opt->assign))(value);
-	return FALSE;
+	return false;
 }
 
 
@@ -4116,12 +4179,12 @@ initialize_pager(FILE *fp)
 static void
 prompt_continue(FILE *fp)
 {
-	int quit_pager = FALSE;
+	bool quit_pager = false;
 
 	if (os_isatty(fileno(fp)) && input_fd == 0)
 		quit_pager = prompt_yes_no(
 	                _("\t------[Enter] to continue or q [Enter] to quit------"),
-	                _("q")[0], FALSE, fp);
+	                _("q")[0], false, fp);
 	if (quit_pager)
 		longjmp(pager_quit_tag, 1);
 	pager_lines_printed = 0;
@@ -4149,7 +4212,7 @@ gprintf(FILE *fp, const char *format, ...)
 	}	 
 #undef GPRINTF_BUFSIZ
 	
-	while (TRUE) {
+	while (true) {
 		va_start(args, format);
 		nchar = vsnprintf(buf + bl, buflen - bl, format, args);
 		va_end(args);
@@ -4237,11 +4300,6 @@ serialize_subscript(char *buf, int buflen, struct list_item *item)
 static void
 serialize(int type)
 {
-#ifndef HAVE_LIBREADLINE
-#define HIST_ENTRY void
-#define history_list()	NULL
-#endif
-
 	static char *buf = NULL;
 	static int buflen = 0;
 	int bl;
@@ -4346,7 +4404,7 @@ enlarge_buffer:
 				nchar = serialize_subscript(buf + bl, buflen - bl, wd);
 			else if (IS_FIELD(wd))
 				nchar = snprintf(buf + bl, buflen - bl, "%d%c%d%c%d%c",
-				            wd->number, FSEP, D_field, FSEP, (int) wd->symbol->numbr, FSEP);
+				            wd->number, FSEP, D_field, FSEP, (int) get_number_si(wd->symbol), FSEP);
 			else
 				nchar = snprintf(buf + bl, buflen - bl, "%d%c%d%c%s%c",
 				            wd->number, FSEP, D_variable, FSEP, wd->sname, FSEP);
@@ -4355,7 +4413,7 @@ enlarge_buffer:
 			cndn = &wd->cndn;
 			break;
 		case HISTORY:
-#ifdef HAVE_LIBREADLINE
+#if defined(HAVE_LIBREADLINE) && defined(HAVE_HISTORY_LIST)
 			h = (HIST_ENTRY *) ptr;
 			nchar = strlen(h->line);
 			if (nchar >= buflen - bl)
@@ -4485,7 +4543,7 @@ unserialize_commands(char *str, int str_len)
 		return;
 	commands_string = str;
 	commands_string_len = str_len;
-	push_cmd_src(INVALID_HANDLE, FALSE, read_commands_string, 0, 0, EXIT_FATAL);
+	push_cmd_src(INVALID_HANDLE, false, read_commands_string, 0, 0, EXIT_FATAL);
 	line_sep = CSEP;
 	read_command();		/* forced to return in do_commands */
 	pop_cmd_src();
@@ -4587,7 +4645,7 @@ unserialize_breakpoint(char **pstr, int *pstr_len, int field_cnt)
 		return NULL;
 	rp = find_rule(src, lineno);
 	if (rp == NULL
-			||  (b = set_breakpoint_at(rp, lineno, TRUE)) == NULL
+			||  (b = set_breakpoint_at(rp, lineno, true)) == NULL
 	)
 		return NULL;
 
@@ -4619,8 +4677,9 @@ unserialize_option(char **pstr, int *pstr_len, int field_cnt ATTRIBUTE_UNUSED)
 	const struct dbg_option *opt;
 
 	for (opt = option_list; opt->name; opt++) {
-		if (STREQN(pstr[0], opt->name, pstr_len[0])) {
+		if (strncmp(pstr[0], opt->name, pstr_len[0]) == 0) {
 			char *value;
+
 			value = estrdup(pstr[1], pstr_len[1]);
 			(*(opt->assign))(value);
 			efree(value);
@@ -4718,14 +4777,14 @@ prompt_yes_no(const char *mesg, char res_true, int res_default, FILE *fp)
 }
 
 /* has_break_or_watch_point --- check if given breakpoint or watchpoint
- *                              number exists. When flag any is TRUE,
+ *                              number exists. When flag any is true,
  *                              check if any breakpoint/watchpoint
  *                              has been set (ignores num). Returns
  *                              type (breakpoint or watchpoint) or 0.
  */
 
 int
-has_break_or_watch_point(int *pnum, int any)
+has_break_or_watch_point(int *pnum, bool any)
 {
 	BREAKPOINT *b = NULL;
 	struct list_item *w = NULL;
@@ -4793,12 +4852,12 @@ do_commands(CMDARG *arg, int cmd)
 	struct commands_item *c;
 	
 	if (cmd == D_commands) {
-		int num, type;
+		int num = -1, type;
 		if (arg == NULL)
-			type = has_break_or_watch_point(&num, TRUE);
+			type = has_break_or_watch_point(&num, true);
 		else {
 			num = arg->a_int;
-			type = has_break_or_watch_point(&num, FALSE);
+			type = has_break_or_watch_point(&num, false);
 		}
 		b = NULL;
 		w = NULL;
@@ -4814,19 +4873,19 @@ do_commands(CMDARG *arg, int cmd)
 			c = c->prev;
 			delete_commands_item(c->next);
 		}
-		return FALSE;
+		return false;
 
 	} else if (cmd == D_end) {
 		commands = NULL;
 		if (read_a_line == read_commands_string) /* unserializig commands */
-			return TRUE;	/* done unserializing, terminate zzparse() */
-		return FALSE;
+			return true;	/* done unserializing, terminate zzparse() */
+		return false;
 
 	} else if (cmd == D_silent) {
 		if (b != NULL)
-			b->silent = TRUE;
+			b->silent = true;
 		else if (w != NULL)
-			w->silent = TRUE;
+			w->silent = true;
 		/* we also append silent command to the list for use
 		 * in `info break(watch)', and to simplify
 		 * serialization/unserialization of commands.
@@ -4849,7 +4908,7 @@ do_commands(CMDARG *arg, int cmd)
 	c->next = commands;
 	commands->prev = c;
 	c->prev->next = c;
-	return FALSE;
+	return false;
 }
 
 /* execute_commands --- execute breakpoint/watchpoint commands, the first
@@ -4862,7 +4921,7 @@ execute_commands(struct commands_item *commands)
 {
 	struct commands_item *c;
 	Func_cmd cmd_ptr;
-	int ret = FALSE;
+	bool ret = false;
 
 	for (c = commands->next; c != commands; c = c->next) {
 		if (c->cmd == D_silent)
@@ -4912,7 +4971,7 @@ do_print_f(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 		{
 			long field_num;
 			r = a->a_node;
-			field_num = (long) r->numbr;
+			field_num = get_number_si(r);
 			tmp[i] = *get_field(field_num, NULL);
 		}
 			break;
@@ -4981,7 +5040,7 @@ do_print_f(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	}
 done:
 	efree(tmp);
-	return FALSE;
+	return false;
 }
 
 /* do_source --- source command */
@@ -4996,12 +5055,12 @@ do_source(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	if (fd <= INVALID_HANDLE) {
 		d_error(_("can't open source file `%s' for reading (%s)"),
 					file, strerror(errno));
-		return FALSE;
+		return false;
 	}
 
-	push_cmd_src(fd, FALSE, g_readline, close, D_source, EXIT_SUCCESS);
+	push_cmd_src(fd, false, g_readline, close, D_source, EXIT_SUCCESS);
 	cmd_src->str = estrdup(file, strlen(file));
-	return FALSE;
+	return false;
 }
 
 /* open_readfd --- open a file for reading */
@@ -5031,7 +5090,7 @@ find_option(char *name)
 	int idx;
 
 	for (idx = 0; (p = option_list[idx].name); idx++) {
-		if (STREQ(p, name))
+		if (strcmp(p, name) == 0)
 			return idx;
 	}
 	return -1;
@@ -5100,19 +5159,19 @@ set_gawk_output(const char *file)
 		if (fp == NULL)
 			close(fd);
 
-	} else if (STREQN(file, "/dev/", 5)) {
+	} else if (strncmp(file, "/dev/", 5) == 0) {
 		char *cp = (char *) file + 5;
 
-		if (STREQ(cp, "stdout"))
+		if (strcmp(cp, "stdout") == 0)
 			return;
-		if (STREQ(cp, "stderr")) {
+		if (strcmp(cp, "stderr") == 0) {
 			output_fp = stderr;
 			output_file = "/dev/stderr";
 			output_is_tty = os_isatty(fileno(stderr));
 			return;
 		}
 		
-		if (STREQN(cp, "fd/", 3)) {
+		if (strncmp(cp, "fd/", 3) == 0) {
 			cp += 3;
 			fd = (int) strtoul(cp, NULL, 10);
 			if (errno == 0 && fd > INVALID_HANDLE) {
@@ -5155,9 +5214,9 @@ set_gawk_output(const char *file)
 static void
 set_prompt(const char *value)
 {
-	efree(dgawk_Prompt);
-	dgawk_Prompt = estrdup(value, strlen(value));
-	dPrompt = dgawk_Prompt;
+	efree(dgawk_prompt);
+	dgawk_prompt = estrdup(value, strlen(value));
+	dbg_prompt = dgawk_prompt;
 }
 
 /* set_option_flag --- convert option string to flag value */ 
@@ -5166,10 +5225,10 @@ static int
 set_option_flag(const char *value)
 {
 	long n;
-	if (STREQ(value, "on"))
-		return TRUE;
-	if (STREQ(value, "off"))
-		return FALSE;
+	if (strcmp(value, "on") == 0)
+		return true;
+	if (strcmp(value, "off") == 0)
+		return false;
 	errno = 0;
 	n = strtol(value, NULL, 0);
 	return (errno == 0 && n != 0);
@@ -5287,11 +5346,11 @@ save_options(const char *file)
 static void
 close_all()
 {
-	int stdio_problem;
+	bool stdio_problem;
 	struct command_source *cs;
 
-	(void) nextfile(&curfile, TRUE);	/* close input data file */
-	(void) close_io(&stdio_problem);
+	(void) nextfile(& curfile, true);	/* close input data file */
+	(void) close_io(& stdio_problem);
 	if (cur_srcfile->fd != INVALID_HANDLE) {
 		close(cur_srcfile->fd);
 		cur_srcfile->fd = INVALID_HANDLE;
@@ -5302,6 +5361,8 @@ close_all()
 			cs->fd = INVALID_HANDLE;
 		}
 	}
+
+	close_extensions();
 
 	set_gawk_output(NULL);	/* closes output_fp if not stdout */ 
 }
@@ -5356,11 +5417,11 @@ execute_code(volatile INSTRUCTION *code)
 	 */ 
 
 	save_stack_size = (stack_ptr  - stack_bottom) + 1;
-	do_flags = FALSE;
+	do_flags = false;
 
 	PUSH_BINDING(fatal_tag_stack, fatal_tag, fatal_tag_valid);
 	if (setjmp(fatal_tag) == 0) {
-		(void) r_interpret((INSTRUCTION *) code);
+		(void) interpret((INSTRUCTION *) code);
 		r = POP_SCALAR();
 	} else	/* fatal error */
 		(void) unwind_stack(save_stack_size);
@@ -5388,6 +5449,7 @@ do_eval(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	int ecount = 0, pcount = 0;
 	int ret;
 	int save_flags = do_flags;
+	SRCFILE *the_source;
 	
 	if (prog_running) {
 		this_frame = find_frame(0);
@@ -5398,15 +5460,15 @@ do_eval(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	ctxt = new_context();
 	ctxt->install_func = append_symbol;	/* keep track of newly installed globals */
 	push_context(ctxt);
-	(void) add_srcfile(SRC_CMDLINE, arg->a_string, srcfiles, NULL, NULL);
-	do_flags = FALSE;
+	the_source = add_srcfile(SRC_CMDLINE, arg->a_string, srcfiles, NULL, NULL);
+	do_flags = false;
 	ret = parse_program(&code);
 	do_flags = save_flags;
 	remove_params(this_func);
 	if (ret != 0) {
 		pop_context();	/* switch to prev context */
-		free_context(ctxt, FALSE /* keep_globals */);
-		return FALSE;
+		free_context(ctxt, false /* keep_globals */);
+		return false;
 	}
 
 	f = lookup("@eval");
@@ -5463,7 +5525,7 @@ do_eval(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 #if 0
 	pf_data.print_func = fprintf;
 	pf_data.fp = out_fp;
-	pf_data.defn = FALSE;	/* in_dump = FALSE */
+	pf_data.defn = false;	/* in_dump = false */
 	(void) print_code(f->code_ptr, &pf_data);
 #endif
 
@@ -5499,15 +5561,28 @@ do_eval(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 		this_func->param_cnt -= ecount;
 	}
 
-	/* always destroy symbol "@eval", however destroy all newly installed
-	 * globals only if fatal error in r_interpret (r == NULL).
+	/*
+	 * Always destroy symbol "@eval", however destroy all newly installed
+	 * globals only if fatal error (execute_code() returing NULL).
 	 */
 
 	pop_context();	/* switch to prev context */
 	free_context(ctxt, (ret_val != NULL));   /* free all instructions and optionally symbols */
-	if (ret_val != NULL)
-		destroy_symbol(f);	/* destroy "@eval" */
-	return FALSE;
+
+	if (ret_val != NULL) {
+		/*
+		 * Remove @eval from FUNCTAB, so that above code
+		 * will work the next time around.
+		 */
+		NODE *s = make_string("@eval", 5);
+
+		(void) assoc_remove(func_table, s);
+		unref(s);
+	}
+
+	free_srcfile(the_source);
+
+	return false;
 }
 
 /*
@@ -5569,14 +5644,14 @@ parse_condition(int type, int num, char *expr)
 	ctxt->install_func = check_symbol;
 	push_context(ctxt);
 	(void) add_srcfile(SRC_CMDLINE, expr, srcfiles, NULL, NULL);
-	do_flags = FALSE;
+	do_flags = false;
 	ret = parse_program(&code);
 	do_flags = save_flags;
 	remove_params(this_func); 
 	pop_context();
 
 	if (ret != 0 || invalid_symbol) {
-		free_context(ctxt, FALSE /* keep_globals */);
+		free_context(ctxt, false /* keep_globals */);
 		return -1;
 	}
 
@@ -5606,7 +5681,7 @@ parse_condition(int type, int num, char *expr)
 out:
 	if (cndn->expr != NULL)
 		efree(cndn->expr);
-	free_context(cndn->ctxt, FALSE);
+	free_context(cndn->ctxt, false);
 	cndn->code = code;
 	cndn->expr = expr;
 	cndn->ctxt = ctxt;
@@ -5623,15 +5698,15 @@ do_condition(CMDARG *arg, int cmd ATTRIBUTE_UNUSED)
 	char *expr = NULL;
 
 	num = arg->a_int;
-	type = has_break_or_watch_point(&num, FALSE);
+	type = has_break_or_watch_point(&num, false);
 	if (! type)
-		return FALSE;
+		return false;
 	arg = arg->next;	/* condition expression */
 	if (arg != NULL)
 		expr = arg->a_string;
 	if (parse_condition(type, num, expr) == 0 && arg != NULL)
 		arg->a_string = NULL;	/* don't let free_cmdarg free it */
-	return FALSE;
+	return false;
 }
 
 /* in_cmd_src --- check if filename already in cmd_src */
@@ -5641,10 +5716,10 @@ in_cmd_src(const char *filename)
 {
 	struct command_source *cs;
 	for (cs = cmd_src; cs != NULL; cs = cs->next) {
-		if (cs->str != NULL && STREQ(cs->str, filename))
-			return TRUE;
+		if (cs->str != NULL && strcmp(cs->str, filename) == 0)
+			return true;
 	}
-	return FALSE;
+	return false;
 }
 
 int
@@ -5658,7 +5733,7 @@ get_eof_status()
 void
 push_cmd_src(
 	int fd,
-	int istty,
+	bool istty,
 	char * (*readfunc)(const char *),
 	int (*closefunc)(int),
 	int ctype,

@@ -17,7 +17,7 @@
 #    <c>    a character representing the current option
 
 # Private Data:
-#    _opti  -- index in multi-flag option, e.g., -abc
+#    _opti  -- index in multiflag option, e.g., -abc
 function getopt(argc, argv, options,    thisopt, i)
 {
     if (length(options) == 0)    # no options given
@@ -38,8 +38,7 @@ function getopt(argc, argv, options,    thisopt, i)
     i = index(options, thisopt)
     if (i == 0) {
         if (Opterr)
-            printf("%c -- invalid option\n",
-                                  thisopt) > "/dev/stderr"
+            printf("%c -- invalid option\n", thisopt) > "/dev/stderr"
         if (_opti >= length(argv[Optind])) {
             Optind++
             _opti = 0
@@ -70,7 +69,7 @@ BEGIN {
     # test program
     if (_getopt_test) {
         while ((_go_c = getopt(ARGC, ARGV, "ab:cd")) != -1)
-            printf("c = <%c>, optarg = <%s>\n",
+            printf("c = <%c>, Optarg = <%s>\n",
                                        _go_c, Optarg)
         printf("non-option arguments:\n")
         for (; Optind < ARGC; Optind++)
